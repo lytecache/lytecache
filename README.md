@@ -1,36 +1,57 @@
 # litecache
 
-Redis-like caching with zero infrastructure. `litecache` gives you the
-familiar Redis API surface -- `set`/`get`, TTLs, atomic counters, eviction --
-backed by a local SQLite file instead of a server. No daemon to run, no port
-to open, no client library to configure. Just `pip install` and go.
+**Redis-like caching with zero infrastructure — no server, just a local SQLite file.**
 
-## Install
+`litecache` gives you the familiar Redis API surface — `set`/`get`, TTLs, atomic counters, eviction, distributed locks — backed by a single portable SQLite file instead of a daemon. No server to run, no port to open, no client to configure. Just add the dependency and go.
 
-```bash
-pip install litecache
-```
+This repository is a **monorepo** containing two independent, same-spec implementations:
+
+| Package | Language | Install | Docs |
+|---|---|---|---|
+| [`litecache-python/`](litecache-python/) | Python 3.9+ | `pip install litecache` | [litecache-python/README.md](litecache-python/README.md) |
+| [`litecache-java/`](litecache-java/) | Java 17+ | `io.litecache:litecache` (Gradle/Maven) | [litecache-java/README.md](litecache-java/README.md) |
+
+They share one on-disk [storage spec](#storage-spec--cross-language-compatibility): a cache file written by one is readable — and, for counters, atomically incrementable — by the other. Everything below is a quick tour; each package's own README is the full reference for that language.
 
 ## Quickstart
+
+<table>
+<tr><th>Python</th><th>Java</th></tr>
+<tr valign="top">
+<td>
 
 ```python
 from litecache import LiteCache
 
-cache = LiteCache()                    # no path, no setup -- just works
+cache = LiteCache()            # no path, no setup
 cache.set("user:42", {"name": "Ada"}, ttl=300)
-cache.get("user:42")                   # {"name": "Ada"}
-cache.incr("hits")                     # 1
-cache.get("missing", "default")        # "default"
+cache.get("user:42")           # {"name": "Ada"}
+cache.incr("hits")             # 1
 ```
 
-That's it. The first call to `LiteCache()` creates the database file
-(including any missing parent directories) and applies the schema
-automatically. There is no `init()`, no migration step, and no server to
-start.
+</td>
+<td>
+
+```java
+import io.litecache.LiteCache;
+import java.time.Duration;
+
+try (LiteCache cache = new LiteCache()) {
+    cache.set("user:42", "Ada", Duration.ofMinutes(5));
+    cache.getString("user:42");  // "Ada"
+    cache.incr("hits");          // 1
+}
+```
+
+</td>
+</tr>
+</table>
+
+That's it in both languages: the first call creates the database file (including any missing parent directories) and applies the schema automatically. There is no `init()`, no migration step, and no server to start.
 
 ## Where is my data?
 
-By default, `LiteCache()` stores its file at:
+Both implementations resolve the **same default file** for the same project, using the same derivation, so a Python process and a Java process started from the same working directory share one cache automatically:
 
 ```
 <platform cache dir>/litecache/<project-id>.db
@@ -40,155 +61,95 @@ By default, `LiteCache()` stores its file at:
 - **macOS**: `~/Library/Caches/litecache/<project-id>.db`
 - **Windows**: `%LOCALAPPDATA%\litecache\<project-id>.db`
 
-`<project-id>` is a short hash of your current working directory, so every
-project on your machine automatically gets its own cache file -- two
-different apps never collide, and nothing is left behind in your repo.
+`<project-id>` is the first 12 hex characters of the SHA-256 hash of your current working directory's resolved, absolute path — identical in both languages, so every project gets its own file automatically and nothing is left behind in your repo.
 
-You can inspect or override this:
+Override it the same way in either language:
+- Pass an explicit path (`LiteCache("/data/cache.db")` in Python, `.path(Path.of("/data/cache.db"))` on the Java builder).
+- Set `LITECACHE_PATH=/data/cache.db` in the environment — takes priority over the default in both.
 
-```python
-LiteCache.default_path()     # -> Path, the resolved default location
-cache.path                   # -> Path, this instance's actual file
-cache.stats()["path"]        # the file is never a mystery
-```
+Both expose the resolved path programmatically (`LiteCache.default_path()` / `cache.path` in Python; `LiteCache.defaultPath()` / `cache.path()` in Java) — the file is never a mystery.
 
-To pin the location explicitly (containers, tests, CI), either pass a path
-or set an environment variable:
+## API at a glance
 
-```python
-cache = LiteCache("/data/cache.db")   # explicit escape hatch
-```
+Both APIs cover the same operations; naming follows each language's conventions (`snake_case` vs `camelCase`, `ttl=` vs `Duration`).
 
-```bash
-export LITECACHE_PATH=/data/cache.db  # takes priority over the default
-```
+| Operation | Python | Java |
+|---|---|---|
+| Set / get | `cache.set(key, value, ttl=None)` / `cache.get(key, default=None)` | `cache.set(key, value, ttl)` / `cache.get(key, Type.class)` |
+| Typed convenience getters | `get(key, default)` returns native type | `getString` / `getLong` / `getDouble` / `getBytes` |
+| Delete / exists | `delete(*keys)` / `exists(key)` | `delete(String... keys)` / `exists(key)` |
+| Set-if-absent / set-if-present | `add(key, value, ttl)` / `replace(key, value, ttl)` | `add(key, value, ttl)` / `replace(key, value, ttl)` |
+| Atomic swap | `get_set(key, value)` | `getSet(key, value)` |
+| Bulk set / get | `set_many(mapping, ttl)` / `get_many(keys)` | `setAll(Map, ttl)` / `getAll(Collection)` |
+| Expiration | `expire(key, ttl)` / `persist(key)` / `ttl(key)` / `touch(key, ttl)` | `expire(key, ttl)` / `persist(key)` / `ttl(key)` / `touch(key, ttl)` |
+| Atomic counters | `incr(key, amount=1)` / `decr(...)` / `incr_float(key, amount)` | `incr(key)` / `decr(key)` / `incrDouble(key, amount)` |
+| Key scanning | `keys(pattern="*")` (lazy iterator) | `keys(pattern)` (lazy `Stream<String>`, GLOB syntax) |
+| Clear / stats | `flush()` / `stats()` | `flush()` / `stats()` |
+| Maintenance | `vacuum()` / `close()` | `vacuum()` / `close()` |
+| Read-through cache | `@cache.memoize(ttl=None)` decorator | `cache.memoize(key, ttl, loader)` |
+| Distributed lock | `with cache.lock(name, timeout=30): ...` | `try (CacheLock l = cache.lock(name, timeout)) { ... }` |
 
-## API
+Two easy-to-miss details that come up often:
+- **`flush()` takes no key/pattern argument** — it always deletes everything in the current namespace. To clear a subset, delete by key or pattern instead: `delete(*keys)` / `cache.delete(String... keys)`, or iterate `keys(pattern)` and delete each match.
+- **Python's `ttl` is a `float` in seconds** (`ttl=5000` means ~83 minutes, not 5 seconds); **Java's is an explicit `Duration`** (`Duration.ofSeconds(5)` vs `Duration.ofMillis(5)`), so there's no unit ambiguity there. In both, expiration is enforced both lazily (on every read) and actively (a background sweeper thread) — see each package's README for details.
 
-| Method | Description |
-|---|---|
-| `set(key, value, ttl=None)` | Store a value, optionally with a TTL in seconds. |
-| `get(key, default=None, cls=None)` | Read a value; returns `default` on miss or expiry. Never raises on miss. `cls` reconstructs a dataclass/plain object from a stored JSON value. |
-| `delete(*keys)` | Delete keys; returns the number actually deleted. |
-| `exists(key)` | Whether a (non-expired) key is present. |
-| `add(key, value, ttl=None)` | Set only if absent (atomic `SET NX`). |
-| `replace(key, value, ttl=None)` | Set only if present (atomic `SET XX`). |
-| `get_set(key, value)` | Atomically swap in a new value, returning the old one. |
-| `set_many(mapping, ttl=None)` / `get_many(keys)` | Bulk set/get in a single transaction. |
-| `expire(key, ttl)` / `persist(key)` | Set or remove a TTL on an existing key. |
-| `ttl(key)` | Seconds remaining (`float`), `-1` if no expiry, `None` if missing. |
-| `touch(key, ttl)` | Refresh a key's TTL (sliding expiration). |
-| `incr(key, amount=1)` / `decr(key, amount=1)` | Atomic integer counters. |
-| `incr_float(key, amount)` | Atomic float counter. |
-| `keys(pattern="*")` | Lazily iterate matching keys (glob syntax). |
-| `flush()` | Clear the current namespace. |
-| `stats()` | Hits, misses, hit rate, key count, size, evictions, path. |
-| `vacuum()` / `close()` | Reclaim disk space / shut down cleanly. |
-| `memoize(ttl=None)` | Decorator that caches a function's return value. |
-| `lock(name, timeout=30, blocking=True, poll=0.05)` | Process-safe context-manager lock. |
-
-`LiteCache` also works as a context manager:
+Both are context managers / `AutoCloseable`:
 
 ```python
 with LiteCache() as cache:
     cache.set("k", "v")
 ```
 
-## Serialization
-
-`str`/`int`/`float`/`bytes`/`bool` round-trip exactly. Anything else --
-`dict`, `list`, dataclasses, plain objects -- is JSON-encoded, and reads back
-as a plain `dict`/`list` by default:
-
-```python
-from dataclasses import dataclass
-
-@dataclass
-class Address:
-    city: str
-    zip_code: str
-
-@dataclass
-class Person:
-    name: str
-    age: int
-    address: Address
-
-cache.set("p:1", Person("Ada", 30, Address("London", "E1")))
-
-cache.get("p:1")               # {"name": "Ada", "age": 30, "address": {...}} -- plain dict
-cache.get("p:1", cls=Person)   # Person(name="Ada", age=30, address=Address(...)) -- typed
+```java
+try (LiteCache cache = new LiteCache()) {
+    cache.set("k", "v");
+}
 ```
 
-`tuple` values are JSON-encoded too and come back as `list` -- there's no
-tuple type in JSON.
-
-Values that can't be represented as JSON raise `SerializationError` by
-default (`serializer="auto"`). If you genuinely need to cache an arbitrary
-Python object, opt into pickling explicitly:
-
-```python
-cache = LiteCache(serializer="pickle")   # falls back to pickle when JSON can't represent a value
-```
-
-**Security note:** unpickling can execute arbitrary code. The default
-(`serializer="auto"`) and `serializer="json"` never write or read pickled
-data, so this doesn't apply to them. Only `serializer="pickle"` (or
-`serializer="auto"` with `allow_pickle=True`) can read pickled values --
-treat a cache file that might contain pickled data like application code,
-and never open one from an untrusted source.
+See each package's README for full method signatures, configuration options, and serialization rules (values are stored as portable JSON so complex objects round-trip across both languages — see [Storage spec](#storage-spec--cross-language-compatibility)).
 
 ## When to use litecache
 
-**Use it when:**
-- You want caching, counters, or TTLs in a single-process (or single-machine,
-  multi-process) application with no infrastructure to stand up.
-- Scripts, CLIs, notebooks, small web services, background jobs.
-- You want the cache file to survive restarts without running a separate
-  daemon.
+**Good fit:**
+- Single-node apps (or single-machine, multi-process apps) that want caching, counters, or TTLs with zero infrastructure.
+- Scripts, CLIs, notebooks, small web services, background jobs, test fixtures.
+- A cache that needs to survive process restarts without running a separate daemon.
+- Multi-process coordination via the process-safe distributed lock.
+- Mixed-language systems where a Python and a Java process need to share one cache file.
 
-**Don't use it when:**
-- You need a cache shared live across multiple servers/hosts -- SQLite is a
-  local file, not a network service. Use Redis/Memcached instead.
-- You have heavy concurrent write throughput from many processes -- SQLite's
-  single-writer model will serialize writes and become a bottleneck.
-- You need pub/sub, streams, or other Redis data structures beyond a
-  key-value store with counters. `litecache` intentionally stays small.
+**Not a good fit:**
+- A cache shared live across multiple servers/hosts — SQLite is a local file, not a network service. Use Redis/Memcached.
+- Heavy concurrent write throughput from many processes — SQLite's single-writer model will serialize writes and become a bottleneck.
+- Pub/sub, streams, or other Redis data structures beyond key-value + counters — litecache intentionally stays small.
+- Complex queries over cached data — use a real database.
 
-## Configuration reference
+## Storage spec & cross-language compatibility
 
-```python
-LiteCache(
-    path=None,             # explicit file path; default: LiteCache.default_path()
-    namespace="default",   # logical partition within the database file
-    max_keys=None,         # evict when the namespace exceeds this many keys
-    max_bytes=None,        # evict when the namespace exceeds this many bytes
-    eviction="lru",        # "lru" | "ttl" | "random" | "noeviction"
-    sweep_interval=60.0,   # seconds between background maintenance passes;
-                           # None disables the thread and does maintenance
-                           # opportunistically every ~100 operations instead
-    serializer="auto",     # "auto" | "json" (strict, no pickle) | "pickle"
-    strict=False,          # True: raise on internal read errors instead of
-                           # degrading to a miss
-    allow_pickle=False,    # "auto" mode only: allow reading pickled values
-                           # written by a serializer="pickle" cache
-)
+Both implementations read and write the same schema and value encoding, documented as a versioned spec in each package (kept in sync): [litecache-python/SPEC.md](litecache-python/SPEC.md), [litecache-java/SPEC.md](litecache-java/SPEC.md). In short:
+
+- One SQLite file, WAL mode, `PRAGMA busy_timeout=5000` so cross-process/cross-thread contention waits instead of failing.
+- Every value is tagged with a `value_type` code: `0` bytes, `1` UTF-8 string, `2` int (UTF-8 decimal text, not binary — this is what lets `incr`/`decr` be a single atomic SQL UPSERT in both languages), `3` float (UTF-8 decimal text), `4` JSON (the format for any object/dict/list/dataclass/POJO/record).
+- Codes `5` (Python pickle) and `6` (Java native serialization) are language-specific escape hatches that are **never** used for the portable path — reading one from the other language raises a clear serialization error instead of returning garbage.
+- The zero-config default path derivation (`<project-id>` = SHA-256 of the resolved cwd) is byte-for-byte identical between the two, so both languages land on the same file for the same project directory.
+
+## Developing this repo
+
+Each package builds independently:
+
+```bash
+# Python
+cd litecache-python
+pip install -e ".[dev]"   # or: uv sync
+pytest
+
+# Java
+cd litecache-java
+./gradlew build           # compiles, runs tests, generates javadoc
+./gradlew publishToMavenLocal
 ```
 
-- **Eviction policies**: `lru` (default, evicts least-recently-used),
-  `ttl` (evicts soonest-to-expire first), `random`, and `noeviction` (raises
-  `CacheFullError` instead of evicting). `lfu` is a documented TODO.
-- **Serialization**: see the [Serialization](#serialization) section above.
-  `serializer="auto"` (the default) and `serializer="json"` never write or
-  read pickled data; `serializer="pickle"` opts into pickling as a fallback
-  for values JSON can't represent.
-- **Concurrency**: safe across threads (one connection per thread) and
-  across processes (SQLite WAL mode). `stats()` counters (hits/misses/etc.)
-  are per-process, not shared cluster-wide.
-
-See [SPEC.md](SPEC.md) for the on-disk schema and full semantics, and
-[CHANGELOG.md](CHANGELOG.md) for release notes.
+See [litecache-python/README.md](litecache-python/README.md) and [litecache-java/README.md](litecache-java/README.md) for full configuration references, and [litecache-python/CHANGELOG.md](litecache-python/CHANGELOG.md) for release notes.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).
