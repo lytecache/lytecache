@@ -1,0 +1,1056 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>litecache — embedded, Redis-like caching for Python &amp; Java</title>
+<meta name="description" content="Redis-like caching with zero infrastructure. One SQLite file, no server, readable from Python and Java alike." />
+<style>
+/* ============================= TOKENS ============================= */
+:root{
+  --bg:#f3f4f2;
+  --surface:#ffffff;
+  --surface-2:#eceeec;
+  --border:#dbdfdc;
+  --text:#16201f;
+  --text-dim:#5c6b68;
+  --accent:#96591a;
+  --accent-ink:#ffffff;
+  --accent-soft:rgba(150,89,26,0.10);
+  --good:#2f7d5e;
+  --shadow:rgba(20,30,28,0.10);
+
+  --font-display: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-display);
+
+  --space-1:.25rem; --space-2:.5rem; --space-3:.75rem; --space-4:1rem;
+  --space-6:1.5rem; --space-8:2rem; --space-12:3rem; --space-16:4rem; --space-24:6rem;
+
+  --radius:7px; --radius-sm:4px;
+  --content-w:720px;
+  --sidebar-w:248px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#10171a;
+    --surface:#161e21;
+    --surface-2:#1c2528;
+    --border:#2a3538;
+    --text:#e7ebe9;
+    --text-dim:#8fa19d;
+    --accent:#e0a446;
+    --accent-ink:#1a1206;
+    --accent-soft:rgba(224,164,70,0.13);
+    --good:#57c79a;
+    --shadow:rgba(0,0,0,0.4);
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f3f4f2; --surface:#ffffff; --surface-2:#eceeec; --border:#dbdfdc;
+  --text:#16201f; --text-dim:#5c6b68; --accent:#96591a; --accent-ink:#ffffff;
+  --accent-soft:rgba(150,89,26,0.10); --good:#2f7d5e; --shadow:rgba(20,30,28,0.10);
+}
+:root[data-theme="dark"]{
+  --bg:#10171a; --surface:#161e21; --surface-2:#1c2528; --border:#2a3538;
+  --text:#e7ebe9; --text-dim:#8fa19d; --accent:#e0a446; --accent-ink:#1a1206;
+  --accent-soft:rgba(224,164,70,0.13); --good:#57c79a; --shadow:rgba(0,0,0,0.4);
+}
+
+/* ============================= RESET ============================= */
+*,*::before,*::after{ box-sizing:border-box; }
+html{ scroll-behavior:smooth; }
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior:auto; }
+  *,*::before,*::after{ animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; }
+}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--font-body); font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4{
+  font-family:var(--font-display); font-weight:700; margin:0 0 var(--space-4);
+  text-wrap:balance; letter-spacing:-0.01em; color:var(--text);
+}
+p{ margin:0 0 var(--space-4); max-width:65ch; color:var(--text); }
+a{ color:var(--accent); text-decoration:none; }
+a:hover{ text-decoration:underline; }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
+ul{ padding-left:1.2em; }
+li{ margin-bottom:var(--space-2); }
+table{ border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+th,td{ text-align:left; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border); font-size:.9rem; }
+th{ font-family:var(--font-display); font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--text-dim); font-weight:600; }
+code{ font-family:var(--font-mono); font-size:.85em; }
+:not(pre) > code{
+  background:var(--surface-2); border:1px solid var(--border); border-radius:4px;
+  padding:.1em .4em;
+}
+.table-wrap{ overflow-x:auto; border:1px solid var(--border); border-radius:var(--radius); }
+.table-wrap table{ min-width:480px; }
+.table-wrap th,.table-wrap td{ border-bottom:1px solid var(--border); }
+.table-wrap tr:last-child td{ border-bottom:none; }
+
+/* ============================= LAYOUT ============================= */
+.skip-link{
+  position:absolute; left:-999px; top:0; background:var(--accent); color:var(--accent-ink);
+  padding:.6em 1em; z-index:200; border-radius:0 0 6px 0;
+}
+.skip-link:focus{ left:0; }
+
+.topbar{
+  position:sticky; top:0; z-index:100; height:56px; display:flex; align-items:center;
+  gap:var(--space-4); padding:0 var(--space-6); background:color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter:blur(10px); border-bottom:1px solid var(--border);
+}
+.brand{ display:flex; align-items:center; gap:.55em; font-family:var(--font-display); font-weight:700; font-size:1.05rem; color:var(--text); }
+.brand:hover{ text-decoration:none; }
+.brand-mark{
+  width:20px; height:20px; border-radius:4px; background:var(--accent);
+  display:grid; place-items:center; color:var(--accent-ink); font-size:12px; font-weight:800; flex-shrink:0;
+}
+.topbar-spacer{ flex:1; }
+.topbar-links{ display:flex; align-items:center; gap:var(--space-4); }
+.topbar-links a{ color:var(--text-dim); font-size:.9rem; font-family:var(--font-display); }
+.topbar-links a:hover{ color:var(--accent); }
+.icon-btn{
+  display:grid; place-items:center; width:32px; height:32px; border-radius:var(--radius-sm);
+  border:1px solid var(--border); background:var(--surface); color:var(--text-dim); cursor:pointer;
+}
+.icon-btn:hover{ color:var(--accent); border-color:var(--accent); }
+.nav-toggle{ display:none; }
+
+.shell{ display:grid; grid-template-columns:var(--sidebar-w) 1fr; max-width:1180px; margin:0 auto; }
+.sidebar{
+  border-right:1px solid var(--border); padding:var(--space-8) var(--space-6);
+  align-self:start; position:sticky; top:56px; height:calc(100vh - 56px); overflow-y:auto;
+}
+.nav-group{ margin-bottom:var(--space-6); }
+.nav-group-title{
+  font-family:var(--font-display); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--text-dim); margin-bottom:var(--space-2); font-weight:700;
+}
+.nav-group a{
+  display:block; padding:.32em 0; font-size:.88rem; color:var(--text-dim); border-left:2px solid transparent;
+  padding-left:.7em; margin-left:-.7em; transition:color .12s, border-color .12s;
+}
+.nav-group a:hover{ color:var(--text); text-decoration:none; }
+.nav-group a.active{ color:var(--accent); border-left-color:var(--accent); font-weight:600; }
+
+main{ min-width:0; padding:0 var(--space-8) var(--space-24); }
+.section{ max-width:var(--content-w); padding-top:var(--space-16); scroll-margin-top:72px; }
+.section + .section{ border-top:1px solid var(--border); }
+.section > .eyebrow{
+  font-family:var(--font-display); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--accent); margin-bottom:var(--space-2); font-weight:700;
+}
+.section h2{ font-size:1.6rem; }
+.section h3{ font-size:1.15rem; margin-top:var(--space-8); }
+.lead{ font-size:1.08rem; color:var(--text-dim); }
+
+/* ============================= HERO ============================= */
+.hero{
+  position:relative; padding:var(--space-16) var(--space-8) var(--space-16);
+  overflow:hidden;
+}
+.hero::before{
+  content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
+  background-image:repeating-linear-gradient(to bottom, transparent 0 34px, var(--border) 34px 35px);
+  background-position:0 10px;
+  -webkit-mask-image:linear-gradient(to bottom, black 60%, transparent 100%);
+          mask-image:linear-gradient(to bottom, black 60%, transparent 100%);
+}
+.hero-inner{ position:relative; z-index:1; max-width:1180px; margin:0 auto; display:grid; grid-template-columns:1.1fr 1fr; gap:var(--space-12); align-items:center; }
+.hero h1{ font-size:2.5rem; line-height:1.08; margin-bottom:var(--space-4); }
+.hero h1 .hl{ color:var(--accent); }
+.hero p.lead{ font-size:1.15rem; max-width:46ch; }
+.hero-ctas{ display:flex; gap:var(--space-3); margin-top:var(--space-6); flex-wrap:wrap; }
+.btn{
+  font-family:var(--font-display); font-size:.85rem; font-weight:700; padding:.7em 1.2em; border-radius:var(--radius-sm);
+  border:1px solid var(--border); cursor:pointer; display:inline-flex; align-items:center; gap:.5em;
+}
+.btn:hover{ text-decoration:none; }
+.btn-primary{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.btn-primary:hover{ filter:brightness(1.08); }
+.btn-ghost{ background:var(--surface); color:var(--text); }
+.btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
+
+.install-tabs{ margin-top:var(--space-8); max-width:520px; }
+.pillrow{ display:inline-flex; border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; background:var(--surface); }
+.pill{
+  font-family:var(--font-display); font-size:.75rem; font-weight:700; padding:.4em .9em; border-radius:999px;
+  border:none; background:transparent; color:var(--text-dim); cursor:pointer;
+}
+.pill.active{ background:var(--accent); color:var(--accent-ink); }
+.install-panes{ margin-top:var(--space-3); }
+
+/* terminal demo */
+.termcard{
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+  box-shadow:0 12px 32px -12px var(--shadow); overflow:hidden;
+}
+.termcard-bar{ display:flex; align-items:center; gap:.5em; padding:.6em .8em; border-bottom:1px solid var(--border); }
+.termdot{ width:9px; height:9px; border-radius:50%; background:var(--border); }
+.termcard-title{ margin-left:.4em; font-family:var(--font-display); font-size:.72rem; color:var(--text-dim); }
+.termcard pre{ margin:0; padding:1.1em 1.2em; min-height:11.5em; }
+.termcard .cursor{ display:inline-block; width:.55em; height:1.05em; background:var(--accent); vertical-align:text-bottom; animation:blink 1s steps(1) infinite; }
+@keyframes blink{ 50%{ opacity:0; } }
+
+/* ============================= FEATURE GRID ============================= */
+.feature-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-top:var(--space-8); }
+.feature{ background:var(--surface); padding:var(--space-6); }
+.feature h4{ font-size:.95rem; margin-bottom:.4em; }
+.feature p{ font-size:.85rem; color:var(--text-dim); margin:0; }
+
+/* ============================= CODE / SNIPPETS ============================= */
+.snippet{ border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin:var(--space-4) 0 var(--space-6); background:var(--surface-2); }
+.snippet-head{ display:flex; align-items:center; justify-content:space-between; padding:.5em .7em; border-bottom:1px solid var(--border); }
+.snippet pre{ margin:0; padding:1em 1.1em; overflow-x:auto; font-size:.85rem; line-height:1.55; }
+.snippet-pane{ display:none; }
+.snippet-pane.is-active{ display:block; }
+.copy-btn{
+  font-family:var(--font-display); font-size:.68rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase;
+  color:var(--text-dim); background:transparent; border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:.3em .6em; cursor:pointer;
+}
+.copy-btn:hover{ color:var(--accent); border-color:var(--accent); }
+.copy-btn.copied{ color:var(--good); border-color:var(--good); }
+
+/* syntax token colors */
+.tok-kw{ color:var(--accent); }
+.tok-str{ color:var(--good); }
+.tok-com{ color:var(--text-dim); font-style:italic; }
+.tok-num{ color:#7a8fd6; }
+:root[data-theme="light"] .tok-num, :root:not([data-theme="dark"]) .tok-num { color:#5568c7; }
+@media (prefers-color-scheme: dark){ .tok-num{ color:#8fa6ff; } }
+:root[data-theme="dark"] .tok-num{ color:#8fa6ff; }
+.tok-fn{ color:var(--text); font-weight:600; }
+
+/* ============================= CALLOUTS ============================= */
+.callout{ border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:var(--radius-sm); padding:var(--space-4) var(--space-5); background:var(--accent-soft); margin:var(--space-6) 0; }
+.callout .eyebrow{ font-family:var(--font-display); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); font-weight:700; margin-bottom:.4em; }
+.callout p:last-child{ margin-bottom:0; }
+.callout.good{ border-left-color:var(--good); }
+.callout.good .eyebrow{ color:var(--good); }
+
+/* ============================= FIT LISTS ============================= */
+.fit-grid{ display:grid; grid-template-columns:1fr 1fr; gap:var(--space-8); margin-top:var(--space-6); }
+.fit-col h3{ margin-top:0; font-size:1rem; display:flex; align-items:center; gap:.5em; }
+.fit-mark{ width:1.1em; height:1.1em; border-radius:3px; display:inline-grid; place-items:center; font-size:.7rem; font-weight:800; flex-shrink:0; }
+.fit-mark.yes{ background:var(--good); color:var(--surface); }
+.fit-mark.no{ background:var(--text-dim); color:var(--surface); }
+.fit-col ul{ padding-left:0; list-style:none; }
+.fit-col li{ font-size:.9rem; color:var(--text-dim); padding-left:1.6em; position:relative; }
+.fit-col li::before{ content:"—"; position:absolute; left:0; color:var(--border); }
+
+/* ============================= API GROUPS ============================= */
+.api-group{ margin-bottom:var(--space-12); }
+.api-group h3{ display:flex; align-items:baseline; gap:.6em; }
+.api-group .sig{ font-size:.78rem; color:var(--text-dim); font-weight:400; font-family:var(--font-mono); }
+
+/* ============================= FOOTER ============================= */
+footer{ border-top:1px solid var(--border); padding:var(--space-12) var(--space-8); }
+.footer-inner{ max-width:1180px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; gap:var(--space-4); flex-wrap:wrap; }
+.footer-inner p{ margin:0; font-size:.85rem; color:var(--text-dim); }
+.footer-links{ display:flex; gap:var(--space-6); }
+.footer-links a{ font-size:.85rem; color:var(--text-dim); font-family:var(--font-display); }
+.footer-links a:hover{ color:var(--accent); }
+
+/* ============================= RESPONSIVE ============================= */
+@media (max-width:960px){
+  .shell{ grid-template-columns:1fr; }
+  .sidebar{
+    position:fixed; inset:56px 0 0 0; height:calc(100vh - 56px); width:min(80vw,300px); z-index:90;
+    background:var(--bg); transform:translateX(-100%); transition:transform .18s ease; box-shadow:8px 0 24px var(--shadow);
+  }
+  .sidebar.open{ transform:translateX(0); }
+  .sidebar-scrim{ display:none; position:fixed; inset:56px 0 0 0; background:rgba(0,0,0,.35); z-index:85; }
+  .sidebar-scrim.open{ display:block; }
+  .nav-toggle{ display:grid; }
+  .hero-inner{ grid-template-columns:1fr; }
+  .feature-grid{ grid-template-columns:1fr 1fr; }
+  .fit-grid{ grid-template-columns:1fr; }
+  main{ padding:0 var(--space-4) var(--space-16); }
+}
+@media (max-width:600px){
+  .hero h1{ font-size:1.9rem; }
+  .feature-grid{ grid-template-columns:1fr; }
+  .topbar-links a:not(.icon-btn){ display:none; }
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#quickstart">Skip to content</a>
+
+<header class="topbar">
+  <button class="icon-btn nav-toggle" id="navToggle" aria-label="Toggle navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="#top">
+    <span class="brand-mark">λ</span>
+    litecache
+  </a>
+  <div class="topbar-spacer"></div>
+  <nav class="topbar-links">
+    <a href="https://github.com/lytecache/litecache" target="_blank" rel="noopener">GitHub</a>
+    <a href="#configuration">Config</a>
+    <a href="#api-reference">API</a>
+  </nav>
+  <button class="icon-btn" id="themeToggle" aria-label="Toggle color theme">◐</button>
+</header>
+
+<div class="sidebar-scrim" id="scrim"></div>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group">
+      <div class="nav-group-title">Overview</div>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#where-is-my-data">Where is my data?</a>
+      <a href="#when-to-use">When to use litecache</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">Guide</div>
+      <a href="#ttl">TTL &amp; expiration</a>
+      <a href="#flush-delete">Flush &amp; delete</a>
+      <a href="#configuration">Configuration</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">API reference</div>
+      <a href="#api-reference">Overview</a>
+      <a href="#api-set-get">Set &amp; get</a>
+      <a href="#api-objects">Objects &amp; generics</a>
+      <a href="#api-atomic">Add / replace / swap</a>
+      <a href="#api-batch">Batch operations</a>
+      <a href="#api-counters">Atomic counters</a>
+      <a href="#api-scan">Key scanning</a>
+      <a href="#api-stats">Stats &amp; maintenance</a>
+      <a href="#api-locks">Distributed locks</a>
+      <a href="#api-memoize">Memoize</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">Cross-language</div>
+      <a href="#storage-spec">Storage spec &amp; type codes</a>
+    </div>
+  </aside>
+
+  <main id="top">
+
+    <section class="hero" aria-label="Introduction">
+      <div class="hero-inner">
+        <div>
+          <p class="eyebrow" style="font-family:var(--font-display);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:700;">Embedded key-value store</p>
+          <h1>Redis-like caching.<br><span class="hl">Zero infrastructure.</span></h1>
+          <p class="lead">One local SQLite file stands in for the server. <code>set</code>, <code>get</code>, TTLs, atomic counters, eviction, and process-safe locks — from Python and Java alike, reading and writing the very same file.</p>
+          <div class="hero-ctas">
+            <a class="btn btn-primary" href="#quickstart">Get started →</a>
+            <a class="btn btn-ghost" href="https://github.com/lytecache/litecache" target="_blank" rel="noopener">View source</a>
+          </div>
+          <div class="install-tabs">
+            <div class="pillrow" role="tablist" aria-label="Install method">
+              <button class="pill install-pill active" data-install="pip">pip</button>
+              <button class="pill install-pill" data-install="gradle">Gradle</button>
+              <button class="pill install-pill" data-install="maven">Maven</button>
+            </div>
+            <div class="install-panes">
+              <div class="snippet" style="margin:.6em 0 0;">
+                <div class="snippet-head">
+                  <span style="font-family:var(--font-display);font-size:.72rem;color:var(--text-dim);">Install</span>
+                  <button class="copy-btn" data-copy>Copy</button>
+                </div>
+                <div class="snippet-pane is-active" data-install-pane="pip"><pre><code data-syntax="bash">pip install litecache</code></pre></div>
+                <div class="snippet-pane" data-install-pane="gradle"><pre><code data-syntax="groovy">implementation 'io.litecache:litecache:0.1.0'</code></pre></div>
+                <div class="snippet-pane" data-install-pane="maven"><pre><code data-syntax="xml">&lt;dependency&gt;
+  &lt;groupId&gt;io.litecache&lt;/groupId&gt;
+  &lt;artifactId&gt;litecache&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+&lt;/dependency&gt;</code></pre></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="termcard" aria-hidden="true">
+          <div class="termcard-bar">
+            <span class="termdot"></span><span class="termdot"></span><span class="termdot"></span>
+            <span class="termcard-title" id="termTitle">quickstart.py</span>
+          </div>
+          <pre><code class="tok-kw" id="termOutput" style="display:block;white-space:pre-wrap;"></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-label="Feature summary">
+      <div class="feature-grid">
+        <div class="feature"><h4>Zero config</h4><p>The first write creates the file, directories, and schema. No init step.</p></div>
+        <div class="feature"><h4>One file format</h4><p>Python and Java read and write the identical schema — even the same counters.</p></div>
+        <div class="feature"><h4>Atomic under load</h4><p>Counters and locks are single SQL statements, correct across threads and processes.</p></div>
+        <div class="feature"><h4>Nothing to run</h4><p>WAL-mode SQLite instead of a daemon. Ships inside your process.</p></div>
+      </div>
+    </section>
+
+    <section class="section" id="quickstart">
+      <p class="eyebrow">Overview</p>
+      <h2>Quickstart</h2>
+      <p class="lead">Add the dependency, then use it. No path, no server, no migration step.</p>
+      <div class="snippet lang-group">
+        <div class="snippet-head">
+          <div class="pillrow" role="tablist" aria-label="Language">
+            <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+            <button class="pill lang-btn" data-lang-btn="java">Java</button>
+          </div>
+          <button class="copy-btn" data-copy>Copy</button>
+        </div>
+        <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">from litecache import LiteCache
+
+cache = LiteCache()                     # no path, no setup -- just works
+cache.set("user:42", {"name": "Ada"}, ttl=300)
+cache.get("user:42")                    # {"name": "Ada"}
+cache.incr("hits")                      # 1</code></pre></div>
+        <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">import io.litecache.LiteCache;
+import java.time.Duration;
+
+try (LiteCache cache = new LiteCache()) {
+    cache.set("user:42", "Ada", Duration.ofMinutes(5));
+    cache.getString("user:42");          // "Ada"
+    cache.incr("hits");                  // 1
+}</code></pre></div>
+      </div>
+      <p>Both are context managers: <code>with LiteCache() as cache:</code> in Python, <code>try (LiteCache cache = new LiteCache())</code> in Java. Closing flushes any buffered state and stops the background sweeper cleanly.</p>
+    </section>
+
+    <section class="section" id="where-is-my-data">
+      <p class="eyebrow">Overview</p>
+      <h2>Where is my data?</h2>
+      <p class="lead">By default, both languages resolve the exact same file for the same project — so a Python process and a Java process started from the same directory share one cache automatically.</p>
+      <pre style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:1em 1.2em;font-size:.85rem;">&lt;platform cache dir&gt;/litecache/&lt;project-id&gt;.db</pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Platform</th><th>Default location</th></tr></thead>
+          <tbody>
+            <tr><td>Linux</td><td><code>$XDG_CACHE_HOME/litecache/&lt;project-id&gt;.db</code>, or <code>~/.cache/litecache/&lt;project-id&gt;.db</code></td></tr>
+            <tr><td>macOS</td><td><code>~/Library/Caches/litecache/&lt;project-id&gt;.db</code></td></tr>
+            <tr><td>Windows</td><td><code>%LOCALAPPDATA%\litecache\&lt;project-id&gt;.db</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>&lt;project-id&gt;</code> is the first 12 hex characters of the SHA-256 hash of your current working directory's resolved, absolute path — an identical derivation in both languages, so every project gets its own file and nothing is left behind in your repo.</p>
+      <h3>Overriding it</h3>
+      <ul>
+        <li>Pass an explicit path — <code>LiteCache("/data/cache.db")</code> in Python, <code>.path(Path.of("/data/cache.db"))</code> on the Java builder.</li>
+        <li>Set <code>LITECACHE_PATH=/data/cache.db</code> in the environment — takes priority over the default in both languages.</li>
+      </ul>
+      <p>Introspect it programmatically: <code>LiteCache.default_path()</code> / <code>cache.path</code> in Python, <code>LiteCache.defaultPath()</code> / <code>cache.path()</code> in Java. The file is never a mystery.</p>
+    </section>
+
+    <section class="section" id="ttl">
+      <p class="eyebrow">Guide</p>
+      <h2>TTL &amp; expiration</h2>
+      <p class="lead">Expiration applies identically to every value type — strings, numbers, dataclasses, dicts, POJOs, records. There's nothing special about storing an object.</p>
+
+      <div class="callout">
+        <p class="eyebrow">Watch the units</p>
+        <p><strong>Python's <code>ttl</code> is a <code>float</code>, in seconds.</strong> <code>ttl=5000</code> means "expire in 5000 seconds" (~83 minutes), not 5 seconds — the most common reason a key seems to "never expire." <strong>Java's is an explicit <code>Duration</code></strong> (<code>Duration.ofSeconds(5)</code> vs. <code>Duration.ofMillis(5)</code>), so there's no unit ambiguity there.</p>
+      </div>
+
+      <div class="snippet lang-group">
+        <div class="snippet-head">
+          <div class="pillrow" role="tablist" aria-label="Language">
+            <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+            <button class="pill lang-btn" data-lang-btn="java">Java</button>
+          </div>
+          <button class="copy-btn" data-copy>Copy</button>
+        </div>
+        <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">cache.set("session", {"user_id": 42}, ttl=300)   # expires in 300s (5 min)
+cache.set("otp", "123456", ttl=0.5)              # expires in 500ms
+
+cache.ttl("session")        # seconds remaining, e.g. 298.7
+cache.ttl("permanent_key")  # -1 if no TTL was set
+cache.ttl("missing")        # None if the key doesn't exist
+
+cache.expire("session", 60)   # overwrite the TTL: now expires in 60s
+cache.persist("session")      # remove the TTL entirely
+cache.touch("session", 300)   # sliding expiration: refresh back to 300s</code></pre></div>
+        <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.set("session", "42", Duration.ofMinutes(5));
+cache.set("otp", "123456", Duration.ofMillis(500));
+
+cache.ttl("session");     // Duration remaining
+cache.ttl("permanent");   // Duration.ofSeconds(-1) if no TTL
+cache.ttl("missing");     // null if the key doesn't exist
+
+cache.expire("session", Duration.ofSeconds(60));  // overwrite the TTL
+cache.persist("session");                          // remove the TTL entirely
+cache.touch("session", Duration.ofMinutes(5));     // sliding expiration</code></pre></div>
+      </div>
+
+      <h3>Lazy and active expiration</h3>
+      <p>Expiration is enforced two ways, in both languages:</p>
+      <ul>
+        <li><strong>Lazily</strong>, on every read (<code>get</code> / <code>exists</code> / <code>getAll</code>): an expired row is treated as a miss and deleted on the spot, even with the background sweeper disabled.</li>
+        <li><strong>Actively</strong>, by a background sweeper thread that runs every <code>sweep_interval</code> / <code>sweepInterval</code> (default 60s) and deletes expired rows in batches, so disk isn't held by dead keys even if nothing ever reads them again.</li>
+      </ul>
+      <p>If you inspect the <code>.db</code> file directly (a SQLite browser, say) moments after a key expires but before the next sweep tick, the row may still be physically present — that's expected. <code>get()</code>/<code>exists()</code> already treat it as gone. Lower the sweep interval, or call <code>vacuum()</code>, if you need the file to shrink sooner.</p>
+    </section>
+
+    <section class="section" id="flush-delete">
+      <p class="eyebrow">Guide</p>
+      <h2>Flush &amp; delete</h2>
+      <div class="snippet lang-group">
+        <div class="snippet-head">
+          <div class="pillrow" role="tablist" aria-label="Language">
+            <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+            <button class="pill lang-btn" data-lang-btn="java">Java</button>
+          </div>
+          <button class="copy-btn" data-copy>Copy</button>
+        </div>
+        <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">cache.delete("key1", "key2")   # delete specific keys; returns how many existed
+cache.flush()                  # delete EVERYTHING in the current namespace</code></pre></div>
+        <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.delete("key1", "key2");   // delete specific keys; returns how many existed
+cache.flush();                  // delete EVERYTHING in the current namespace</code></pre></div>
+      </div>
+      <p><code>flush()</code> takes no key or pattern argument by design — it always clears the entire namespace (the default namespace, unless you configured a different one). To clear a subset, delete by key or by pattern instead:</p>
+      <div class="snippet lang-group">
+        <div class="snippet-head">
+          <div class="pillrow" role="tablist" aria-label="Language">
+            <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+            <button class="pill lang-btn" data-lang-btn="java">Java</button>
+          </div>
+          <button class="copy-btn" data-copy>Copy</button>
+        </div>
+        <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">for key in list(cache.keys("session:*")):
+    cache.delete(key)</code></pre></div>
+        <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.keys("session:*").forEach(cache::delete);</code></pre></div>
+      </div>
+      <div class="callout">
+        <p class="eyebrow">Namespaces</p>
+        <p>If two <code>LiteCache</code> instances point at the <strong>same file but different namespaces</strong>, they're fully isolated — <code>flush()</code> on one never touches the other's keys. That's the usual reason <code>flush()</code> looks like it "didn't delete everything": check you're flushing the same namespace you wrote to.</p>
+      </div>
+    </section>
+
+    <section class="section" id="when-to-use">
+      <p class="eyebrow">Overview</p>
+      <h2>When to use litecache</h2>
+      <div class="fit-grid">
+        <div class="fit-col">
+          <h3><span class="fit-mark yes">✓</span> Good fit</h3>
+          <ul>
+            <li>Single-node apps (or single-machine, multi-process apps) that want caching, counters, or TTLs with zero infrastructure</li>
+            <li>Scripts, CLIs, notebooks, small web services, background jobs, test fixtures</li>
+            <li>A cache that survives process restarts without a separate daemon</li>
+            <li>Multi-process coordination via the process-safe distributed lock</li>
+            <li>Mixed-language systems where a Python and a Java process share one cache file</li>
+          </ul>
+        </div>
+        <div class="fit-col">
+          <h3><span class="fit-mark no">✕</span> Not a good fit</h3>
+          <ul>
+            <li>A cache shared live across multiple servers/hosts — SQLite is a local file, not a network service. Use Redis/Memcached.</li>
+            <li>Heavy concurrent write throughput from many processes — SQLite's single-writer model will serialize writes and become a bottleneck</li>
+            <li>Pub/sub, streams, or other Redis data structures beyond key-value + counters</li>
+            <li>Complex queries over cached data — use a real database</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="configuration">
+      <p class="eyebrow">Guide</p>
+      <h2>Configuration</h2>
+      <p class="lead">Every option has a sane default; nothing here is required to get started.</p>
+      <div class="snippet lang-group">
+        <div class="snippet-head">
+          <div class="pillrow" role="tablist" aria-label="Language">
+            <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+            <button class="pill lang-btn" data-lang-btn="java">Java</button>
+          </div>
+          <button class="copy-btn" data-copy>Copy</button>
+        </div>
+        <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">LiteCache(
+    path=None,             # explicit file path; default: LiteCache.default_path()
+    namespace="default",   # logical partition within the database file
+    max_keys=None,         # evict when the namespace exceeds this many keys
+    max_bytes=None,        # evict when the namespace exceeds this many bytes
+    eviction="lru",        # "lru" | "ttl" | "random" | "noeviction"
+    sweep_interval=60.0,   # seconds between maintenance passes; None disables
+                           # the thread and sweeps opportunistically instead
+    serializer="auto",     # "auto" | "json" (strict) | "pickle"
+    strict=False,          # True: raise on internal read errors
+    allow_pickle=False,    # "auto" mode only: allow reading pickled values
+)</code></pre></div>
+        <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">LiteCache cache = LiteCache.builder()
+    .path(Path.of("/data/my-cache.db"))    // optional; platform cache dir if omitted
+    .namespace("sessions")                  // isolate multiple caches in one file
+    .maxKeys(100_000)                       // evict when exceeded (default: 1M)
+    .maxBytes(256L * 1024 * 1024)           // evict when exceeded (default: 1 GB)
+    .eviction(Eviction.LRU)                 // LRU (default), TTL, RANDOM, NOEVICTION
+    .sweepInterval(Duration.ofSeconds(60))  // background cleanup frequency
+    .strict(false)                          // on read error: log+miss, or throw
+    .build();</code></pre></div>
+      </div>
+      <p><strong>Eviction policies:</strong> <code>lru</code> (default, evicts least-recently-used), <code>ttl</code> (soonest-to-expire first), <code>random</code>, and <code>noeviction</code> (rejects the write instead of evicting). LFU is a documented TODO in both.</p>
+    </section>
+
+    <section class="section" id="api-reference">
+      <p class="eyebrow">API reference</p>
+      <h2>Method reference</h2>
+      <p class="lead">Grouped by what you're trying to do. Every group below shows both languages side by side — flip the toggle once and it stays flipped for the rest of the page.</p>
+
+      <div class="api-group" id="api-set-get">
+        <h3>Set &amp; get</h3>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">cache.set("key", "value")
+cache.set("key", "value", ttl=300)
+cache.get("key")                 # None if missing or expired
+cache.get("key", "default")      # custom default on miss
+cache.delete("key1", "key2")     # returns count actually deleted
+cache.exists("key")</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.set("key", "value");
+cache.set("key", "value", Duration.ofMinutes(5));
+String val = cache.getString("key");   // null if missing or expired
+Long n = cache.getLong("key");
+Double d = cache.getDouble("key");
+byte[] b = cache.getBytes("key");
+cache.delete("key1", "key2");          // returns count actually deleted
+cache.exists("key");</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-objects">
+        <h3>Objects &amp; generics</h3>
+        <p>Anything JSON can represent — dicts, lists, dataclasses, POJOs, records — round-trips as portable JSON, readable from either language.</p>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">from dataclasses import dataclass
+
+@dataclass
+class Person:
+    name: str
+    age: int
+
+cache.set("p:1", Person("Ada", 30))
+cache.get("p:1")                # plain dict by default
+cache.get("p:1", cls=Person)    # typed: Person(name="Ada", age=30)</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">record Person(String name, int age) {}
+
+cache.set("p:1", new Person("Ada", 30));
+cache.get("p:1", Person.class);
+
+// Generic types a raw Class can't express:
+Map<String, Long> scores = cache.get("scores",
+    new TypeReference<Map<String, Long>>() {});</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-atomic">
+        <h3>Add / replace / atomic swap</h3>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">cache.add("key", "value", ttl=60)      # set only if absent (SET NX)
+cache.replace("key", "value", ttl=60)  # set only if present (SET XX)
+cache.get_set("key", "new")            # atomic swap, returns the old value</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.add("key", "value", ttl);      // set only if absent (SET NX)
+cache.replace("key", "value", ttl);  // set only if present (SET XX)
+cache.getSet("key", "new");          // atomic swap, returns the old value</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-batch">
+        <h3>Batch operations</h3>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">cache.set_many({"a": "1", "b": "2"}, ttl=60)   # single transaction
+cache.get_many(["a", "b", "missing"])           # {"a": "1", "b": "2"}</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.setAll(Map.of("a", "1", "b", "2"), ttl);   // single transaction
+cache.getAll(List.of("a", "b", "missing"));       // {a=1, b=2}</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-counters">
+        <h3>Atomic counters</h3>
+        <p>A single SQL <code>UPSERT</code> per call — correct under concurrent access from many threads or processes, never a read-modify-write race.</p>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">cache.incr("hits")             # +1
+cache.incr("hits", 5)          # +5
+cache.decr("hits")             # -1
+cache.incr_float("ratio", 0.5)</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.incr("hits");              // +1
+cache.incr("hits", 5);           // +5
+cache.decr("hits");              // -1
+cache.incrDouble("ratio", 0.5);</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-scan">
+        <h3>Key scanning</h3>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">for key in cache.keys("session:*"):   # lazy iterator, glob syntax
+    print(key)</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">cache.keys("session:*")                // lazy Stream&lt;String&gt;, GLOB syntax
+     .forEach(System.out::println);</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-stats">
+        <h3>Stats &amp; maintenance</h3>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">cache.stats()
+# {'hits': 42, 'misses': 3, 'hit_rate': 0.93, 'key_count': 12,
+#  'size_bytes': 8291, 'evictions': 0, 'path': '...'}
+cache.vacuum()   # reclaim disk space
+cache.close()    # shut down cleanly</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">CacheStats stats = cache.stats();
+stats.hitRate();     // percentage
+stats.keyCount();
+stats.sizeBytes();
+stats.path();
+cache.vacuum();      // reclaim disk space
+cache.close();       // shut down cleanly (or use try-with-resources)</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-locks">
+        <h3>Distributed locks</h3>
+        <p>Process-safe: built on the same atomic <code>add()</code> semantics as everything else, so only one holder — across threads <em>and</em> processes — can hold a given lock name at once.</p>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">with cache.lock("resource", timeout=30):
+    do_critical_work()</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">try (CacheLock lock = cache.lock("resource", Duration.ofSeconds(30))) {
+    doCriticalWork();
+}</code></pre></div>
+        </div>
+      </div>
+
+      <div class="api-group" id="api-memoize">
+        <h3>Read-through memoization</h3>
+        <div class="snippet lang-group">
+          <div class="snippet-head">
+            <div class="pillrow" role="tablist" aria-label="Language">
+              <button class="pill lang-btn active" data-lang-btn="python">Python</button>
+              <button class="pill lang-btn" data-lang-btn="java">Java</button>
+            </div>
+            <button class="copy-btn" data-copy>Copy</button>
+          </div>
+          <div class="snippet-pane is-active" data-lang="python"><pre><code data-syntax="python">@cache.memoize(ttl=3600)
+def expensive(x):
+    return compute(x)</code></pre></div>
+          <div class="snippet-pane" data-lang="java"><pre><code data-syntax="java">String result = cache.memoize("expensive:" + x, Duration.ofHours(1),
+    () -> compute(x));</code></pre></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="storage-spec">
+      <p class="eyebrow">Cross-language</p>
+      <h2>Storage spec &amp; type codes</h2>
+      <p class="lead">Both implementations read and write the identical schema — one SQLite file, WAL mode, <code>PRAGMA busy_timeout=5000</code> so cross-process contention waits instead of failing. Every value is tagged with a <code>value_type</code> code:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Type</th><th>Encoding</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>Bytes</td><td>Raw bytes, stored as-is</td></tr>
+            <tr><td>1</td><td>String</td><td>UTF-8 text</td></tr>
+            <tr><td>2</td><td>Integer</td><td>UTF-8 decimal text — <em>not</em> binary. This is what lets <code>incr</code>/<code>decr</code> be one atomic SQL UPSERT in both languages.</td></tr>
+            <tr><td>3</td><td>Float</td><td>UTF-8 decimal text, same reasoning as integers</td></tr>
+            <tr><td>4</td><td>JSON</td><td>Any object, dict, list, dataclass, POJO, or record</td></tr>
+            <tr><td>5</td><td>Python pickle</td><td>Python-only escape hatch; reading it from Java raises a clear error, never garbage</td></tr>
+            <tr><td>6</td><td>Java serialized</td><td>Reserved, never written; reading it from Python raises a clear error</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The zero-config default path derivation (<code>&lt;project-id&gt;</code> = SHA-256 of the resolved working directory) is byte-for-byte identical between the two, so both languages land on the same file for the same project directory — see <a href="#where-is-my-data">Where is my data?</a> above.</p>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <p>litecache is licensed under Apache 2.0.</p>
+    <div class="footer-links">
+      <a href="https://github.com/lytecache/litecache" target="_blank" rel="noopener">GitHub</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#api-reference">API reference</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------- theme ---------- */
+  var root = document.documentElement;
+  var themeBtn = document.getElementById("themeToggle");
+  function effectiveTheme(){
+    var stored = localStorage.getItem("lc-theme");
+    if (stored) return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function applyTheme(t, persist){
+    root.setAttribute("data-theme", t);
+    themeBtn.textContent = t === "dark" ? "☀" : "◐";
+    themeBtn.setAttribute("aria-label", "Switch to " + (t === "dark" ? "light" : "dark") + " theme");
+    if (persist) localStorage.setItem("lc-theme", t);
+  }
+  applyTheme(effectiveTheme(), false);
+  themeBtn.addEventListener("click", function(){
+    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(next, true);
+  });
+
+  /* ---------- mobile nav ---------- */
+  var sidebar = document.getElementById("sidebar");
+  var scrim = document.getElementById("scrim");
+  var navToggle = document.getElementById("navToggle");
+  function closeNav(){ sidebar.classList.remove("open"); scrim.classList.remove("open"); navToggle.setAttribute("aria-expanded","false"); }
+  function openNav(){ sidebar.classList.add("open"); scrim.classList.add("open"); navToggle.setAttribute("aria-expanded","true"); }
+  navToggle.addEventListener("click", function(){ sidebar.classList.contains("open") ? closeNav() : openNav(); });
+  scrim.addEventListener("click", closeNav);
+  sidebar.querySelectorAll("a").forEach(function(a){ a.addEventListener("click", closeNav); });
+
+  /* ---------- global language toggle (syncs every snippet on the page) ---------- */
+  var currentLang = localStorage.getItem("lc-lang") || "python";
+  function applyLang(lang, persist){
+    currentLang = lang;
+    document.querySelectorAll(".lang-group").forEach(function(group){
+      group.querySelectorAll(".lang-btn").forEach(function(btn){
+        btn.classList.toggle("active", btn.getAttribute("data-lang-btn") === lang);
+      });
+      group.querySelectorAll("[data-lang]").forEach(function(pane){
+        pane.classList.toggle("is-active", pane.getAttribute("data-lang") === lang);
+      });
+    });
+    document.getElementById("termTitle").textContent = lang === "java" ? "Quickstart.java" : "quickstart.py";
+    if (persist) localStorage.setItem("lc-lang", lang);
+  }
+  document.addEventListener("click", function(e){
+    var btn = e.target.closest("[data-lang-btn]");
+    if (btn) applyLang(btn.getAttribute("data-lang-btn"), true);
+  });
+  applyLang(currentLang, false);
+
+  /* ---------- install method toggle (independent, 3-way) ---------- */
+  document.addEventListener("click", function(e){
+    var btn = e.target.closest("[data-install]");
+    if (!btn) return;
+    var target = btn.getAttribute("data-install");
+    btn.parentElement.querySelectorAll(".install-pill").forEach(function(p){ p.classList.toggle("active", p === btn); });
+    document.querySelectorAll("[data-install-pane]").forEach(function(pane){
+      pane.classList.toggle("is-active", pane.getAttribute("data-install-pane") === target);
+    });
+  });
+
+  /* ---------- copy buttons ---------- */
+  function copyText(text){
+    if (navigator.clipboard && window.isSecureContext){
+      return navigator.clipboard.writeText(text);
+    }
+    // Fallback for contexts without the async Clipboard API (e.g. a page opened directly from
+    // disk via file://, which browsers don't treat as a secure context).
+    return new Promise(function(resolve, reject){
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.left = "-1000px";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      if (ok) resolve(); else reject(new Error("copy failed"));
+    });
+  }
+  document.querySelectorAll(".snippet").forEach(function(snippet){
+    var btn = snippet.querySelector("[data-copy]");
+    if (!btn) return;
+    btn.addEventListener("click", function(){
+      var pane = snippet.querySelector(".snippet-pane.is-active") || snippet.querySelector(".snippet-pane");
+      var code = pane ? pane.querySelector("code") : snippet.querySelector("code");
+      var text = code ? code.textContent : "";
+      var original = btn.textContent;
+      copyText(text).then(function(){
+        btn.textContent = "Copied";
+        btn.classList.add("copied");
+        setTimeout(function(){ btn.textContent = original; btn.classList.remove("copied"); }, 1500);
+      }).catch(function(){
+        btn.textContent = "Select & Ctrl+C";
+        setTimeout(function(){ btn.textContent = original; }, 1800);
+      });
+    });
+  });
+
+  /* ---------- scrollspy ---------- */
+  var navLinks = Array.prototype.slice.call(document.querySelectorAll(".sidebar a"));
+  var sections = navLinks.map(function(a){ return document.getElementById(a.getAttribute("href").slice(1)); }).filter(Boolean);
+  if ("IntersectionObserver" in window && sections.length){
+    var byId = {};
+    navLinks.forEach(function(a){ byId[a.getAttribute("href").slice(1)] = a; });
+    var observer = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if (entry.isIntersecting){
+          navLinks.forEach(function(a){ a.classList.remove("active"); });
+          var link = byId[entry.target.id];
+          if (link) link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
+    sections.forEach(function(s){ observer.observe(s); });
+  }
+
+  /* ---------- tiny syntax highlighter ---------- */
+  function escapeHtml(s){
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+  var KEYWORDS = {
+    python: ["def","class","return","import","from","with","as","for","in","if","elif","else","None","True","False","lambda","try","except","finally","not","and","or","is","yield","raise","pass","self","@dataclass"],
+    java: ["public","private","protected","static","final","void","new","class","record","interface","try","catch","finally","return","import","package","this","extends","implements","throws","null","true","false","long","double","int","String","var"],
+    bash: [],
+    groovy: [],
+    xml: []
+  };
+  function highlight(raw, lang){
+    var kws = KEYWORDS[lang] || [];
+    // Single left-to-right pass over the *original* source: a master regex finds the next
+    // comment, string, number, or keyword token (in that priority order), we escape and emit the
+    // plain-text gap before it, then escape and wrap the token itself. Nothing here ever re-scans
+    // HTML this function already produced, so a token's own text (e.g. the word "class" appearing
+    // inside a string) can't be mistaken for markup or re-tokenized.
+    var commentPattern = (lang === "python" || lang === "bash") ? "#.*" : "//.*";
+    var stringPattern = "\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*'";
+    var numberPattern = "\\b\\d+\\.?\\d*\\b";
+    var parts = ["(" + commentPattern + ")", "(" + stringPattern + ")", "(" + numberPattern + ")"];
+    if (kws.length){
+      var kwPattern = kws.map(function(k){ return k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }).join("|");
+      parts.push("\\b(" + kwPattern + ")\\b");
+    }
+    var master = new RegExp(parts.join("|"), "g");
+    var out = "";
+    var lastIndex = 0;
+    raw.replace(master, function(match, com, str, num, kw, offset){
+      out += escapeHtml(raw.slice(lastIndex, offset));
+      var cls = com !== undefined ? "tok-com" : str !== undefined ? "tok-str" : num !== undefined ? "tok-num" : "tok-kw";
+      out += '<span class="' + cls + '">' + escapeHtml(match) + '</span>';
+      lastIndex = offset + match.length;
+      return match;
+    });
+    out += escapeHtml(raw.slice(lastIndex));
+    return out;
+  }
+  document.querySelectorAll("code[data-syntax]").forEach(function(el){
+    var lang = el.getAttribute("data-syntax");
+    el.innerHTML = highlight(el.textContent, lang);
+  });
+
+  /* ---------- hero terminal typing demo ---------- */
+  var demos = {
+    python: [
+      'from litecache import LiteCache','',
+      'cache = LiteCache()',
+      'cache.set("user:42", {"name": "Ada"}, ttl=300)',
+      'cache.get("user:42")',
+      '# {\'name\': \'Ada\'}',
+      'cache.incr("hits")',
+      '# 1'
+    ],
+    java: [
+      'import io.litecache.LiteCache;','',
+      'try (LiteCache cache = new LiteCache()) {',
+      '    cache.set("user:42", "Ada", Duration.ofMinutes(5));',
+      '    cache.getString("user:42");',
+      '    // "Ada"',
+      '    cache.incr("hits");',
+      '    // 1',
+      '}'
+    ]
+  };
+  var termEl = document.getElementById("termOutput");
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function renderStatic(lines){
+    termEl.textContent = lines.join("\n");
+  }
+  if (reduceMotion || !termEl) {
+    renderStatic(demos.python);
+  } else {
+    (function loop(){
+      var seq = ["python","java"];
+      var seqIdx = 0;
+      function typeLang(){
+        var lines = demos[seq[seqIdx]];
+        var full = lines.join("\n");
+        var i = 0;
+        termEl.textContent = "";
+        var typer = setInterval(function(){
+          i += 2;
+          termEl.textContent = full.slice(0, i);
+          if (i >= full.length){
+            clearInterval(typer);
+            setTimeout(function(){
+              seqIdx = (seqIdx + 1) % seq.length;
+              typeLang();
+            }, 2200);
+          }
+        }, 14);
+      }
+      typeLang();
+    })();
+  }
+})();
+</script>
+</body>
+</html>

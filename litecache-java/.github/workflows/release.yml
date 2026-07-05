@@ -1,0 +1,66 @@
+name: Release to Maven Central
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      
+      - name: Build
+        run: ./gradlew clean build --no-daemon
+
+      - name: Publish to Maven Local (verify)
+        run: ./gradlew publishToMavenLocal --no-daemon
+
+      - name: Publish signed release to Sonatype Central
+        env:
+          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
+          ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.SONATYPE_USERNAME }}
+          ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
+        run: ./gradlew publishMavenJavaPublicationToSonatypeCentralRepository --no-daemon
+
+      - name: Create Release Notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # LiteCache Java ${{ github.ref_name }}
+          
+          See CHANGELOG.md for details.
+          
+          ## Installation
+          
+          ```gradle
+          implementation 'io.litecache:litecache:${{ github.ref_name }}'
+          ```
+          
+          ## Artifacts
+          
+          - litecache-${{ github.ref_name }}.jar
+          - litecache-${{ github.ref_name }}-sources.jar
+          - litecache-${{ github.ref_name }}-javadoc.jar
+          EOF
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release-notes.md
+          files: |
+            build/libs/litecache-*.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
