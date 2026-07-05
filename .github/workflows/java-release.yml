@@ -1,27 +1,33 @@
-name: Release to Maven Central
+name: Release Java to Maven Central
 
 on:
   push:
     tags:
-      - 'v*'
+      # Distinct prefix from the Python release tags (v*.*.*) so tagging one
+      # package's release can never accidentally trigger the other's workflow.
+      - "java-v*"
+
+defaults:
+  run:
+    working-directory: litecache-java
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    
+
     permissions:
-      contents: read
+      contents: write
       packages: write
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
-      
+          java-version: "21"
+          distribution: "temurin"
+
       - name: Build
         run: ./gradlew clean build --no-daemon
 
@@ -36,31 +42,31 @@ jobs:
           ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
         run: ./gradlew publishMavenJavaPublicationToSonatypeCentralRepository --no-daemon
 
-      - name: Create Release Notes
+      - name: Create release notes
         run: |
           cat > release-notes.md << 'EOF'
           # LiteCache Java ${{ github.ref_name }}
-          
-          See CHANGELOG.md for details.
-          
+
+          See litecache-java/README.md for usage and litecache-java/SPEC.md for the storage format.
+
           ## Installation
-          
+
           ```gradle
           implementation 'io.litecache:litecache:${{ github.ref_name }}'
           ```
-          
+
           ## Artifacts
-          
+
           - litecache-${{ github.ref_name }}.jar
           - litecache-${{ github.ref_name }}-sources.jar
           - litecache-${{ github.ref_name }}-javadoc.jar
           EOF
-      
-      - name: Create GitHub Release
+
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v1
         with:
-          body_path: release-notes.md
+          body_path: litecache-java/release-notes.md
           files: |
-            build/libs/litecache-*.jar
+            litecache-java/build/libs/litecache-*.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
