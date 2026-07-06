@@ -3,7 +3,7 @@
         'name' => 'lytecache/lytecache',
         'pretty_version' => 'dev-main',
         'version' => 'dev-main',
-        'reference' => '589dc7c5b396ba39b3bab37d318f3620ac3955f5',
+        'reference' => 'b4adc47bb71d98235710fd0d6be2e1f15b40cd1c',
         'type' => 'library',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -517,7 +517,7 @@
         'lytecache/lytecache' => array(
             'pretty_version' => 'dev-main',
             'version' => 'dev-main',
-            'reference' => '589dc7c5b396ba39b3bab37d318f3620ac3955f5',
+            'reference' => 'b4adc47bb71d98235710fd0d6be2e1f15b40cd1c',
             'type' => 'library',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),

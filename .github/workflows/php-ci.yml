@@ -26,7 +26,14 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          extensions: pdo, pdo_sqlite
+          # pdo/pdo_sqlite are the core's only real runtime requirement; fileinfo
+          # is not used by lytecache itself but is required transitively by
+          # laravel/framework (via league/flysystem-local) in require-dev, and
+          # isn't enabled by default on the Windows runner's PHP build -- without
+          # it, Composer can't resolve a laravel/framework 12.x + PHP 8.2
+          # dependency graph at all and falls back toward 11.x releases that are
+          # blocked by Composer's security-advisory audit.
+          extensions: pdo, pdo_sqlite, fileinfo
           coverage: none
 
       - name: Validate composer.json
