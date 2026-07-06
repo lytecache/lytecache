@@ -163,9 +163,15 @@
          -webkit-mask-image:linear-gradient(to bottom, black 60%, transparent 100%);
          mask-image:linear-gradient(to bottom, black 60%, transparent 100%);
          }
-         .hero-inner{ position:relative; z-index:1; max-width:1180px; margin:0 auto; display:grid; grid-template-columns:1.1fr 1fr; gap:var(--space-12); align-items:center; }
+         .hero-inner{ position:relative; z-index:1; max-width:1180px; margin:0 auto; }
+         /* Headline and lead run full-width above the two-column row -- at the narrower column
+         width the two-column layout would give them, the lead sentence wrapped to 4-5 lines;
+         full width lets it settle into ~2. */
+         .hero-heading{ max-width:900px; margin-bottom:var(--space-8); }
+         .hero-columns{ display:grid; grid-template-columns:1.1fr 1fr; gap:var(--space-12); align-items:center; }
          .hero h1{ font-size:2.5rem; line-height:1.08; margin-bottom:var(--space-4); }
          .hero h1 .hl{ color:var(--accent); }
+         .hero h1 .nobr{ white-space:nowrap; }
          .hero p.lead{ font-size:1.15rem; max-width:46ch; }
          .hero-ctas{ display:flex; gap:var(--space-3); margin-top:var(--space-6); flex-wrap:wrap; }
          .btn{
@@ -177,15 +183,18 @@
          .btn-primary:hover{ filter:brightness(1.08); }
          .btn-ghost{ background:var(--surface); color:var(--text); }
          .btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
-         .install-tabs{ margin-top:var(--space-8); max-width:520px; }
+         .install-tabs{ margin-top:var(--space-8); max-width:100%; }
          .pillrow{ display:inline-flex; border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; background:var(--surface); }
          .pill{
          font-family:var(--font-display); font-size:.75rem; font-weight:700; padding:.4em .9em; border-radius:999px;
          border:none; background:transparent; color:var(--text-dim); cursor:pointer;
          }
          .pill.active{ background:var(--accent); color:var(--accent-ink); }
-         .install-panes{ margin-top:var(--space-3); }
-         .install-snippet{ margin:.6em 0 0; }
+         /* auto-fit + minmax: two columns when there's genuinely enough room for both to breathe,
+         one column (each pane full-width) the moment the container gets tighter -- no manual
+         breakpoint needed, and it adapts to the hero's own column width, not just viewport width. */
+         .install-panes{ margin-top:var(--space-3); display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:var(--space-4); align-items:start; }
+         .install-snippet{ margin:0; }
          .install-label{ font-family:var(--font-display); font-size:.72rem; color:var(--text-dim); }
          /* terminal demo */
          .termcard{
@@ -293,7 +302,7 @@
          .sidebar-scrim{ display:none; position:fixed; inset:56px 0 0 0; background:rgba(0,0,0,.35); z-index:85; }
          .sidebar-scrim.open{ display:block; }
          .nav-toggle{ display:grid; }
-         .hero-inner{ grid-template-columns:1fr; }
+         .hero-columns{ grid-template-columns:1fr; }
          .feature-grid{ grid-template-columns:1fr 1fr; }
          .fit-grid{ grid-template-columns:1fr; }
          main{ padding:0 var(--space-4) var(--space-16); }
@@ -358,10 +367,13 @@
          <main id="top">
             <section class="hero" aria-label="Introduction">
                <div class="hero-inner">
-                  <div>
+                  <div class="hero-heading">
                      <p class="eyebrow">Embedded key-value store</p>
-                     <h1>Redis-like caching.<br><span class="hl">Zero infrastructure.</span></h1>
+                     <h1><span class="nobr">Redis-like caching.</span> <span class="hl nobr">Zero infrastructure.</span></h1>
                      <p class="lead">One local SQLite file stands in for the server. <code>set</code>, <code>get</code>, TTLs, atomic counters, eviction, and process-safe locks — implemented natively in whichever language you already write, all reading and writing the very same file.</p>
+                  </div>
+                  <div class="hero-columns">
+                  <div>
                      <div class="lang-badges" aria-label="Available for">
                         <span class="lang-badge lang-badge-python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</span>
                         <span class="lang-badge lang-badge-java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</span>
@@ -439,6 +451,7 @@ cache.incr("hits");</code></pre>
                         <span class="termcard-title" id="termTitle">quickstart.py</span>
                      </div>
                      <pre><code class="term-output" id="termOutput"></code></pre>
+                  </div>
                   </div>
                </div>
             </section>

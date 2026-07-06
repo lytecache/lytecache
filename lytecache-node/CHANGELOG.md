@@ -17,3 +17,14 @@ storage format and semantics of the Python and Java implementations in this repo
 - `memoize`/`memoizeAsync`/`wrap` read-through helpers.
 - `lock()`: process-safe distributed lock with `Symbol.dispose` support.
 - Dual ESM + CJS build with type declarations.
+
+### Notes
+
+- `vitest` is pinned to `^3.2.4` (not the latest `^4.x`) with a `vite` override pinned to `^6.3.6`.
+  `vitest@4` depends on `vite@8`, which bundles `rolldown` -- `rolldown`'s ESM build imports
+  `styleText` from `node:util`, an export that doesn't exist before Node 20.12. Since this package's
+  CI matrix (and `engines.node`) supports Node 18, that combination crashes `vitest run` outright on
+  Node 18 with `SyntaxError: The requested module 'node:util' does not provide an export named
+  'styleText'`. `vitest@3` still resolves to `vite@6`, the last major with real Node 18 support.
+  Don't bump `vitest` past `3.x` (or drop the `vite` override) without also dropping Node 18 from
+  the support matrix.
