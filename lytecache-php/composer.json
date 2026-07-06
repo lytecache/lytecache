@@ -37,10 +37,10 @@
         }
     },
     "scripts": {
-        "test": "phpunit",
-        "stan": "phpstan analyse --memory-limit=512M",
-        "pint": "pint",
-        "pint:test": "pint --test"
+        "test": "@php vendor/bin/phpunit",
+        "stan": "@php vendor/bin/phpstan analyse --memory-limit=512M",
+        "pint": "@php vendor/bin/pint",
+        "pint:test": "@php vendor/bin/pint --test"
     },
     "config": {
         "sort-packages": true,
