@@ -33,7 +33,12 @@ jobs:
         run: composer validate --strict
 
       - name: Install dependencies
-        run: composer install --prefer-dist --no-progress
+        # No composer.lock is committed (standard practice for libraries -- see
+        # RELEASING.md) so each PHP version in the matrix resolves its own
+        # compatible dependency graph via `composer update`, rather than all
+        # three versions being forced through one lock file resolved against
+        # a single PHP version.
+        run: composer update --prefer-dist --no-progress
 
       - name: PHPStan
         if: matrix.php-version == '8.3' && matrix.os == 'ubuntu-latest'

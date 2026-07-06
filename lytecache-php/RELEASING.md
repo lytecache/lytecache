@@ -24,6 +24,10 @@ That's the entire one-time setup. No credentials or tokens are stored in this re
 
 That's it -- `composer require lytecache/lytecache` (or `composer require lytecache/lytecache:^0.1`) now resolves to the tagged version for anyone.
 
+## No committed `composer.lock`
+
+This is a library, not an application, so `composer.lock` is gitignored rather than committed -- the standard Composer convention (a lock file pins exact versions for reproducible *application* deployments, but a library should let each consumer, and each CI matrix leg, resolve its own compatible dependency graph against the version ranges in `composer.json`). CI therefore runs `composer update`, not `composer install`, so the PHP 8.2/8.3/8.4 matrix legs each pick dependency versions that actually support that PHP version, rather than all three being forced through one lock file resolved on a single PHP version.
+
 ## Versioning notes
 
 - **Public API** covers everything documented in [README.md](README.md) and the core/Laravel classes under `src/`. A change to a method signature, the on-disk schema, or a type code (see [SPEC.md](SPEC.md)) is a breaking change and requires a major version bump once past `1.0.0`.

@@ -28,3 +28,10 @@ storage format and semantics of the Python and Java implementations in this repo
   'styleText'`. `vitest@3` still resolves to `vite@6`, the last major with real Node 18 support.
   Don't bump `vitest` past `3.x` (or drop the `vite` override) without also dropping Node 18 from
   the support matrix.
+- `better-sqlite3` is pinned to `^11.10.0` (not the latest `^12.x`). `better-sqlite3@12.0.0` dropped
+  Node 18 support entirely (a documented breaking change, no API changes) -- since it has no
+  prebuilt binary for Node 18, `npm install` falls back to compiling from source via `node-gyp`,
+  which then fails on CI (and on any machine without a full native build toolchain) since that
+  fallback path was never set up to succeed. `better-sqlite3@11.10.0` is the last version with
+  Node 18 prebuilt binaries and has an identical API to `12.x`. Don't bump past `11.x` without also
+  dropping Node 18 from the support matrix.

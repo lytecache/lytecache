@@ -20,7 +20,7 @@ return [
   ),
   'composerLocks' => 
   array (
-    '/Users/silemobayo/Documents/PERSONAL-PROJECT/litecache/lytecache-php/composer.lock' => '99ca58fcc6ed3a122125c8e7e002a64bea5811e953b6e32656073b651e7e7848',
+    '/Users/silemobayo/Documents/PERSONAL-PROJECT/litecache/lytecache-php/composer.lock' => '3dc47a6a58fc4bdbe157896d53a1eaa47d6c34f462185dee8423c16137176951',
   ),
   'composerInstalled' => 
   array (
@@ -1852,9 +1852,9 @@ return [
         ),
         'vlucas/phpdotenv' => 
         array (
-          'pretty_version' => 'v5.6.3',
-          'version' => '5.6.3.0',
-          'reference' => '955e7815d677a3eaa7075231212f2110983adecc',
+          'pretty_version' => 'v5.6.4',
+          'version' => '5.6.4.0',
+          'reference' => '416df702837983f8d5ff48c9c3fee4f5f57b980b',
           'type' => 'library',
           'install_path' => '/Users/silemobayo/Documents/PERSONAL-PROJECT/litecache/lytecache-php/vendor/composer/../vlucas/phpdotenv',
           'aliases' => 

@@ -48,7 +48,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
