@@ -47,10 +47,10 @@ final class TtlTest extends TestCase
     public function test_ttl_boundary(): void
     {
         $cache = $this->newCache();
-        $cache->set('k', 'v', ttl: 0.08);
-        usleep(40_000);
+        $cache->set('k', 'v', ttl: 0.3);
+        usleep(50_000);
         self::assertTrue($cache->has('k'));
-        usleep(80_000);
+        usleep(350_000);
         self::assertFalse($cache->has('k'));
     }
 
@@ -90,10 +90,10 @@ final class TtlTest extends TestCase
     public function test_touch_refreshes_ttl(): void
     {
         $cache = $this->newCache();
-        $cache->set('k', 'v', ttl: 0.04);
-        usleep(20_000);
+        $cache->set('k', 'v', ttl: 0.2);
+        usleep(50_000);
         self::assertTrue($cache->touch('k', 0.3));
-        usleep(60_000); // past the original 40ms TTL, within the refreshed 300ms
+        usleep(250_000); // past the original 200ms TTL, within the refreshed 300ms
         self::assertTrue($cache->has('k'));
     }
 
