@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.1.0] - Unreleased
+## [0.2.0] - Unreleased
 
 Initial release. Embedded, Redis-like caching backed by SQLite (via better-sqlite3), matching the
 storage format and semantics of the Python and Java implementations in this repository:

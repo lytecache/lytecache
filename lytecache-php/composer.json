@@ -4,10 +4,11 @@
     "type": "library",
     "license": "Apache-2.0",
     "keywords": ["cache", "sqlite", "redis-alternative", "laravel", "ttl", "embedded"],
-    "homepage": "https://github.com/lytecache/lytecache",
+    "homepage": "https://lytecache.github.io/lytecache",
     "support": {
         "issues": "https://github.com/lytecache/lytecache/issues",
-        "source": "https://github.com/lytecache/lytecache"
+        "source": "https://github.com/lytecache/lytecache",
+        "docs": "https://lytecache.github.io/lytecache"
     },
     "require": {
         "php": "^8.2",

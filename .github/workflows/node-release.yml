@@ -3,7 +3,7 @@ name: Release Node to npm
 on:
   push:
     tags:
-      # Distinct prefix from the Python (v*.*.*) and Java (java-v*) release tags, so tagging one
+      # Distinct prefix from the Python (python-v*) and Java (java-v*) release tags, so tagging one
       # package's release can never accidentally trigger another's workflow.
       - "node-v*"
 
@@ -17,16 +17,24 @@ jobs:
 
     permissions:
       contents: write
-      id-token: write # required for npm provenance
+      id-token: write # required for npm trusted publishing (OIDC) and provenance
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node 20
+      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.0 -- deliberately
+      # newer than the Node 18/20/22 this package's own engines field supports at
+      # runtime. This is just the toolchain that runs `npm publish` in CI; it has
+      # no bearing on what Node versions the published package itself supports
+      # (see node-ci.yml's matrix for that).
+      - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm >= 11.5.1 (required for trusted publishing)
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
@@ -38,10 +46,20 @@ jobs:
           npm run build
           npm test
 
+      # No NODE_AUTH_TOKEN / NPM_TOKEN secret -- authenticates via OIDC trusted
+      # publishing instead (configured on npmjs.com for this package, pointing at
+      # this repo + workflow file). npm's CLI detects the CI OIDC environment
+      # automatically and exchanges it for a short-lived publish token; nothing
+      # long-lived is stored in this repo at all.
+      #
+      # Trusted publishing cannot be configured for a package's very first
+      # publish (npm requires the package to already exist to set this up) --
+      # v0.1.0 must be published manually from a maintainer's machine first
+      # (`npm publish` after `npm login`), after which trusted publishing can be
+      # enabled on npmjs.com and every subsequent tagged release goes through
+      # this workflow with no manual step.
       - name: Publish to npm with provenance
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v1

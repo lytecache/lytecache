@@ -72,7 +72,7 @@ publishing {
             pom {
                 name.set("LyteCache")
                 description.set("Redis-like embedded caching library backed by SQLite: zero-config, portable JSON, production-grade concurrency.")
-                url.set("https://github.com/lytecache/lytecache-java")
+                url.set("https://lytecache.github.io/lytecache")
 
                 licenses {
                     license {

@@ -3,7 +3,7 @@ name: Release Java to Maven Central
 on:
   push:
     tags:
-      # Distinct prefix from the Python release tags (v*.*.*) so tagging one
+      # Distinct prefix from the Python release tags (python-v*) so tagging one
       # package's release can never accidentally trigger the other's workflow.
       - "java-v*"
 

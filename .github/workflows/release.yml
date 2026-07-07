@@ -3,7 +3,12 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"
+      # Distinct prefix from Java (java-v*) and Node.js (node-v*) release tags,
+      # and deliberately NOT the bare "v*.*.*" pattern -- that one is reserved
+      # for lytecache-php's Packagist releases, since Packagist parses git tags
+      # directly as version numbers and a custom prefix like "python-v" would
+      # not be recognized as a valid version there. See lytecache-php/RELEASING.md.
+      - "python-v*"
 
 defaults:
   run:

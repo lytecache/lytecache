@@ -1,6 +1,6 @@
 {
   "name": "lytecache",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Redis-like caching with zero infrastructure -- an embedded, SQLite-backed cache for Node.js.",
   "license": "Apache-2.0",
   "type": "module",
@@ -69,7 +69,7 @@
     "url": "git+https://github.com/lytecache/lytecache.git",
     "directory": "lytecache-node"
   },
-  "homepage": "https://github.com/lytecache/lytecache/tree/main/lytecache-node#readme",
+  "homepage": "https://lytecache.github.io/lytecache",
   "bugs": {
     "url": "https://github.com/lytecache/lytecache/issues"
   },

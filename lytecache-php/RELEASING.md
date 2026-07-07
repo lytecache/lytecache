@@ -15,7 +15,7 @@ That's the entire one-time setup. No credentials or tokens are stored in this re
 1. Make sure `main` is green: `composer validate`, `composer stan`, `composer pint:test`, `composer test` all pass (CI enforces this on every push, but verify locally before tagging).
 2. Update [CHANGELOG.md](CHANGELOG.md): move the `[Unreleased]` section's contents under a new `## [x.y.z] - YYYY-MM-DD` heading.
 3. Commit the changelog update.
-4. Tag the release using [semantic versioning](https://semver.org/) with a `v` prefix:
+4. Tag the release using [semantic versioning](https://semver.org/) with a bare `v` prefix -- deliberately the *only* package in this monorepo that does, since Packagist parses git tags directly as version numbers and wouldn't recognize a monorepo-style prefix like `php-v0.1.0` as a valid version. The other languages' release tags (`python-v*`, `java-v*`, `node-v*`) are kept distinct from this pattern specifically so tagging a PHP release can never accidentally trigger another package's release workflow:
    ```bash
    git tag v0.1.0
    git push origin main --tags
