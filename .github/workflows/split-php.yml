@@ -1,0 +1,42 @@
+name: Split lytecache-php to standalone repo
+
+# Packagist only supports installing from a repository's root (it references
+# source directly by tag rather than hosting built archives -- see
+# lytecache-php/RELEASING.md), so lytecache-php/ needs to also exist as its
+# own standalone repo with composer.json at the root. This workflow keeps
+# that standalone repo in sync automatically on every PHP release tag, using
+# git's built-in `git subtree split` (not the splitsh-lite tool some guides
+# recommend -- its current major version dropped prebuilt binaries and now
+# requires compiling against libgit2, a much heavier and more fragile CI
+# dependency for what only needs to run once per release).
+
+on:
+  push:
+    tags:
+      # The bare vX.Y.Z pattern reserved for PHP/Packagist releases -- see the
+      # comment on this same pattern in release.yml (Python's workflow uses
+      # python-v* specifically so the two can never collide).
+      - "v*.*.*"
+
+jobs:
+  split:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history required for an accurate subtree split
+
+      - name: Ensure git-subtree is available
+        run: sudo apt-get update && sudo apt-get install -y git-subtree
+
+      - name: Split lytecache-php/ out into its own branch
+        run: git subtree split --prefix=lytecache-php -b split-branch
+
+      - name: Push the split history and matching tag to the standalone repo
+        env:
+          SPLIT_REPO_TOKEN: ${{ secrets.SPLIT_REPO_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          git remote add split "https://x-access-token:${SPLIT_REPO_TOKEN}@github.com/lytecache/lytecache-php.git"
+          git push split split-branch:refs/heads/main --force
+          git push split split-branch:refs/tags/${TAG_NAME} --force
