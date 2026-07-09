@@ -17,11 +17,12 @@ Looking for the `lytecache` command-line tool instead? See [lytecache-cli/RELEAS
 3. Commit the changelog update.
 4. Tag using the monorepo-subdirectory convention (`lytecache-go/vX.Y.Z`), distinct from every other component's tag prefix so tagging one release can never trigger another's workflow:
    ```bash
-   git tag lytecache-go/v0.3.0
+   git tag lytecache-go/v0.2.0
    git push origin main --tags
    ```
-5. `.github/workflows/go-release.yml` splits `lytecache-go/` out via `git subtree split` and pushes it, along with a **plain** `v0.3.0` tag (the `lytecache-go/` prefix is stripped -- it only exists to disambiguate tags within this monorepo), to `lytecache/lytecache-go`, runs `go test -race ./...` there as a final sanity check, and opens a GitHub release with install instructions.
-6. Verify: `go get github.com/lytecache/lytecache-go@v0.3.0` resolves, and the version appears on [pkg.go.dev](https://pkg.go.dev/github.com/lytecache/lytecache-go).
+   If this tag already exists locally pointing at an older commit (e.g. from before the CLI/split-repo work), delete and recreate it first: `git tag -d lytecache-go/v0.2.0 && git push origin :refs/tags/lytecache-go/v0.2.0` before retagging.
+5. `.github/workflows/go-release.yml` splits `lytecache-go/` out via `git subtree split` and pushes it, along with a **plain** `v0.2.0` tag (the `lytecache-go/` prefix is stripped -- it only exists to disambiguate tags within this monorepo), to `lytecache/lytecache-go`, runs `go test -race ./...` there as a final sanity check, and opens a GitHub release with install instructions.
+6. Verify: `go get github.com/lytecache/lytecache-go@v0.2.0` resolves, and the version appears on [pkg.go.dev](https://pkg.go.dev/github.com/lytecache/lytecache-go).
 
 ### If lytecache-cli depends on this release
 
