@@ -86,7 +86,9 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write # required for build provenance attestation
+      id-token: write          # mints the OIDC token used to sign the attestation
+      attestations: write      # persists the attestation via the REST attestations API
+      artifact-metadata: write # creates the artifact storage record actions/attest also writes
     steps:
       - uses: actions/checkout@v7
 
