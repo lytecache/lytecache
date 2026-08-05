@@ -51,14 +51,26 @@ jobs:
         with:
           go-version: "stable"
 
-      - name: Drop the monorepo-only local replace directive
+      - name: Drop the monorepo-only local replace directive, if present
+        # A safety net, not the normal case: go.mod no longer carries the
+        # local `replace` day-to-day (it's dropped for good once lytecache-go
+        # is published), so most releases hit the "nothing to commit" branch
+        # here. It only fires for real if a future lytecache-cli change
+        # temporarily reintroduces a replace during development against an
+        # unreleased lytecache-go version -- see the ordering-dependency note
+        # in RELEASING.md.
         run: |
           git worktree add ../split-checkout split-branch
           cd ../split-checkout
           go mod edit -dropreplace=github.com/lytecache/lytecache-go
           go mod tidy
-          git -c user.name="goreleaserbot" -c user.email="goreleaserbot@users.noreply.github.com" \
-            commit -am "Drop monorepo-only replace directive for standalone release"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No replace directive to drop -- go.mod/go.sum already standalone-ready."
+          else
+            git -c user.name="goreleaserbot" -c user.email="goreleaserbot@users.noreply.github.com" \
+              commit -m "Drop monorepo-only replace directive for standalone release"
+          fi
 
       - name: Push the split history and stripped tag to the standalone repo
         env:
