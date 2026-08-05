@@ -1,0 +1,144 @@
+name: Docker (lytecache CLI)
+
+# Packages the lytecache CLI (lytecache-cli/, see Dockerfile.cli) as a
+# multi-arch container image. This is a CLI packaged as an image, not a
+# server -- there is no listener, no daemon, no healthcheck; the container
+# runs one command and exits.
+#
+# Two jobs:
+#   - validate: every PR touching lytecache-cli/ builds both platforms
+#     (push: false) and runs scripts/test-docker-image.sh against the amd64
+#     build, so a broken Dockerfile fails review instead of release.
+#   - publish: on a lytecache-cli/vX.Y.Z tag (or manual dispatch), builds
+#     and pushes linux/amd64+linux/arm64 to GHCR with build provenance
+#     attestation.
+#
+# Tag convention: lytecache-cli/vX.Y.Z, not a bare v*, matching this
+# monorepo's established per-component tag prefixes (python-v*, java-v*,
+# node-v*, lytecache-go/v*; a bare v*.*.* is already reserved for PHP/
+# Packagist -- see release.yml and split-php.yml). The "lytecache-cli/"
+# prefix is stripped below before it's used as the image version, exactly
+# like lytecache-cli-release.yml already does for GoReleaser.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "lytecache-cli/**"
+      - ".github/workflows/docker.yml"
+  push:
+    tags:
+      - "lytecache-cli/v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build and publish (e.g. 0.1.0). Defaults to a dev pseudo-version from the current commit if omitted."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build both platforms (validate only, no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: ./lytecache-cli
+          file: ./lytecache-cli/Dockerfile.cli
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VERSION=pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build amd64 image, loaded locally for testing
+        uses: docker/build-push-action@v7
+        with:
+          context: ./lytecache-cli
+          file: ./lytecache-cli/Dockerfile.cli
+          platforms: linux/amd64
+          load: true
+          tags: lytecache:ci
+          build-args: |
+            VERSION=pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+
+      - name: Run scripts/test-docker-image.sh against the amd64 build
+        working-directory: lytecache-cli
+        run: IMAGE_TAG=lytecache:ci SKIP_BUILD=1 ./scripts/test-docker-image.sh
+
+  publish:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # required for build provenance attestation
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Determine image version
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${GITHUB_REF_NAME#lytecache-cli/}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=0.0.0-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/lytecache
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.value }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.value }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.value }}
+            type=raw,value=latest
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ./lytecache-cli
+          file: ./lytecache-cli/Dockerfile.cli
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/lytecache
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

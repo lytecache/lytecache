@@ -265,6 +265,13 @@
          @media (prefers-color-scheme: dark){ .tok-num{ color:#8fa6ff; } }
          :root[data-theme="dark"] .tok-num{ color:#8fa6ff; }
          :root[data-theme="light"] .tok-num{ color:#5568c7; }
+         /* YAML mapping keys (services:, image:, LYTECACHE_PATH:, ...) -- a distinct
+         tone from .tok-kw's language-keyword accent, since a YAML key is a property
+         name, not a reserved word. */
+         .tok-key{ color:#0e7490; font-weight:600; }
+         @media (prefers-color-scheme: dark){ .tok-key{ color:#67e8f9; } }
+         :root[data-theme="dark"] .tok-key{ color:#67e8f9; }
+         :root[data-theme="light"] .tok-key{ color:#0e7490; }
          .tok-fn{ color:var(--text); font-weight:600; }
          /* ============================= CALLOUTS ============================= */
          .callout{ border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:var(--radius-sm); padding:var(--space-4) var(--space-5); background:var(--accent-soft); margin:var(--space-6) 0; }
@@ -1506,6 +1513,47 @@ scoop install lytecache</code></pre>
                   </div>
                </div>
                <p>Prebuilt binaries, SHA-256 checksums, and <code>.deb</code>/<code>.rpm</code> packages are attached to every <a href="https://github.com/lytecache/lytecache-cli/releases" target="_blank" rel="noopener">GitHub release</a>; a winget manifest ships the same way, pending submission to <code>microsoft/winget-pkgs</code>.</p>
+               <h3>Docker</h3>
+               <p>Also published as a multi-arch (<code>linux/amd64</code>/<code>linux/arm64</code>) container image -- a ~7&nbsp;MB <code>scratch</code>-based image containing nothing but the static binary, for inspecting a cache file without installing Go. This packages <em>only</em> the CLI; lytecache has no server mode, so there's no listener, no daemon, no healthcheck to configure.</p>
+               <p>Mount the same volume your application uses at <code>/var/cache/lytecache</code> and set <code>LYTECACHE_PATH</code> to the value the app already uses, and the CLI needs no <code>--db</code> flag at all -- it resolves that env var exactly the way every library on this page does:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">docker run --rm -v myapp-cache:/var/cache/lytecache \
+  -e LYTECACHE_PATH=/var/cache/lytecache/cache.db \
+  ghcr.io/lytecache/lytecache:latest stats</code></pre>
+               </div>
+               <p>With Compose, add a service like this alongside whatever already runs your app — matching its <code>LYTECACHE_PATH</code> and mounting the same named volume is what makes <code>--db</code> unnecessary:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">docker-compose.yml</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="yaml">services:
+  # ... your existing app service ...
+
+  lytecache-cli:
+    image: ghcr.io/lytecache/lytecache:latest
+    profiles: ["tools"]     # keeps it out of `docker compose up`
+    environment:
+      LYTECACHE_PATH: /var/cache/lytecache/cache.db   # same value your app sets
+    volumes:
+      - lytecache-data:/var/cache/lytecache            # same volume your app mounts
+
+volumes:
+  lytecache-data:</code></pre>
+               </div>
+               <p><code>docker compose run --rm lytecache-cli stats</code> (or <code>keys</code>, or no command at all for the REPL) then just works — <code>run</code> reaches a profiled service directly even though <code>up</code> skips it. The volume goes on the <em>directory</em>, never the <code>.db</code> file itself, since WAL mode creates <code>cache.db-wal</code>/<code>cache.db-shm</code> beside it. Embed the binary in your own image with one line instead, since it's fully static and doesn't care what base image it lands in:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Dockerfile</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">COPY --from=ghcr.io/lytecache/lytecache:latest /lytecache /usr/local/bin/lytecache</code></pre>
+               </div>
+               <p>Full details -- the <code>--db</code> one-liner for an arbitrary host file, the interactive REPL, a shell alias, the Compose profile pattern, and why sharing one <code>.db</code> file over NFS or Kubernetes <code>ReadWriteMany</code> isn't supported (SQLite's locking depends on guarantees network filesystems don't reliably provide) -- are in <a href="https://github.com/lytecache/lytecache-cli#docker" target="_blank" rel="noopener">lytecache-cli's README</a>.</p>
                <h3>A session</h3>
                <div class="termcard linux-term" aria-label="Animated terminal session demo">
                   <div class="termcard-bar">
@@ -1788,41 +1836,53 @@ samson@lytecache:~$ </code></pre>
              php: ["use","function","return","new","class","final","public","private","protected","readonly","const","static","foreach","as","for","while","if","elseif","else","try","catch","finally","throw","echo","fn","null","true","false","this","namespace","enum","match"],
              bash: [],
              groovy: [],
-             xml: []
+             xml: [],
+             yaml: ["true","false","null","yes","no","on","off"]
            };
            KEYWORDS.node = KEYWORDS.typescript; // the hero demo's language key is "node", its syntax is TS
            function highlight(raw, lang){
              var kws = KEYWORDS[lang] || [];
              // Single left-to-right pass over the *original* source: a master regex finds the next
-             // comment, string, number, or keyword token (in that priority order), we escape and emit the
-             // plain-text gap before it, then escape and wrap the token itself. Nothing here ever re-scans
-             // HTML this function already produced, so a token's own text (e.g. the word "class" appearing
-             // inside a string) can't be mistaken for markup or re-tokenized.
-             var commentPattern = (lang === "python" || lang === "bash") ? "#.*" : "//.*";
+             // comment, string, YAML key, number, or keyword token (in that priority order), we escape
+             // and emit the plain-text gap before it, then escape and wrap the token itself. Nothing
+             // here ever re-scans HTML this function already produced, so a token's own text (e.g. the
+             // word "class" appearing inside a string) can't be mistaken for markup or re-tokenized.
+             //
+             // Named capture groups (not positional counting) identify which alternative fired --
+             // replace()'s callback always receives a `groups` object as its last argument when the
+             // regex has named groups, with every name present (possibly undefined) regardless of
+             // which language's subset of alternatives is actually in play this call.
+             var commentPattern = (lang === "python" || lang === "bash" || lang === "yaml") ? "#.*" : "//.*";
              var stringPattern = "\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*'";
              // (?:\.\d+)* rather than \.?\d* so a dotted version like 0.1.0 highlights as one
              // token instead of splitting into "0.1" + "." + "0".
              var numberPattern = "\\b\\d+(?:\\.\\d+)*\\b";
-             var parts = ["(" + commentPattern + ")", "(" + stringPattern + ")", "(" + numberPattern + ")"];
+             var parts = ["(?<com>" + commentPattern + ")", "(?<str>" + stringPattern + ")"];
+             if (lang === "yaml"){
+               // A mapping key: an identifier at the start of a line (YAML indentation is spaces
+               // only, never tabs) immediately followed by ":" and then whitespace or end-of-line --
+               // that trailing check is what keeps this from also matching the ":" inside a plain
+               // scalar value on the same line, like an "image: repo/name:tag" version tag, or a
+               // list item value that just happens to contain a colon.
+               parts.push("(?<=^ *)(?<key>[\\w.-]+):(?=\\s|$)");
+             }
+             parts.push("(?<num>" + numberPattern + ")");
              if (kws.length){
                var kwPattern = kws.map(function(k){ return k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }).join("|");
-               parts.push("\\b(" + kwPattern + ")\\b");
+               parts.push("\\b(?<kw>" + kwPattern + ")\\b");
              }
-             var master = new RegExp(parts.join("|"), "g");
+             var master = new RegExp(parts.join("|"), "gm");
              var out = "";
              var lastIndex = 0;
-             raw.replace(master, function(){
-               // Capture-group count varies (xml/bash/groovy have no keyword group at all), so
-               // don't rely on a fixed parameter list -- replace() always passes offset and the
-               // full string as the last two arguments, whatever the group count is.
-               var args = arguments;
-               var match = args[0];
-               var offset = args[args.length - 2];
-               var hasKeywordGroup = args.length > 6; // match + com/str/num[/kw] + offset + string
-               var com = args[1], str = args[2], num = args[3];
-               var kw = hasKeywordGroup ? args[4] : undefined;
+             raw.replace(master, function(match){
+               var groups = arguments[arguments.length - 1];
+               var offset = arguments[arguments.length - 3];
                out += escapeHtml(raw.slice(lastIndex, offset));
-               var cls = com !== undefined ? "tok-com" : str !== undefined ? "tok-str" : num !== undefined ? "tok-num" : "tok-kw";
+               var cls = groups.com !== undefined ? "tok-com"
+                 : groups.str !== undefined ? "tok-str"
+                 : groups.key !== undefined ? "tok-key"
+                 : groups.num !== undefined ? "tok-num"
+                 : "tok-kw";
                out += '<span class="' + cls + '">' + escapeHtml(match) + '</span>';
                lastIndex = offset + match.length;
                return match;

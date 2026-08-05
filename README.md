@@ -229,6 +229,20 @@ A handful of abbreviations show up above without being spelled out inline. Here'
 | CJS / ESM | CommonJS / ECMAScript Modules | Node.js's two module systems (`require()` vs `import`). The Node.js package ships both. |
 | SHA-256 | Secure Hash Algorithm, 256-bit | A one-way fingerprint function used to derive each project's default cache filename from its working directory. |
 
+## Docker
+
+`lytecache` itself has no server mode -- there's nothing to containerize as a service. What *is* published as a multi-arch (`linux/amd64`/`linux/arm64`) container image is the [CLI](lytecache-cli/): a ~7 MB `scratch`-based image (**coming soon** -- not tagged/published yet, see [lytecache-cli/RELEASING.md](lytecache-cli/RELEASING.md)) that runs one command and exits, for inspecting or editing a cache file without installing Go.
+
+The pattern that matters: mount whatever volume your application already mounts its cache on at `/var/cache/lytecache`, and set `LYTECACHE_PATH` to the same value the app uses -- the CLI then needs no `--db` flag, because it resolves that env var exactly the way every library above does.
+
+```bash
+docker run --rm -v myapp-cache:/var/cache/lytecache \
+  -e LYTECACHE_PATH=/var/cache/lytecache/cache.db \
+  ghcr.io/lytecache/lytecache:latest stats
+```
+
+With Compose, `docker compose run --rm lytecache-cli stats` does the same thing if both services mount the same named volume (see [`lytecache-cli/examples/docker-compose.yml`](lytecache-cli/examples/docker-compose.yml)). Full details -- inspecting an arbitrary host file with `--db`, the interactive REPL, embedding the binary in your own image via `COPY --from=`, a shell alias, and why sharing one `.db` file over NFS/Kubernetes `ReadWriteMany` isn't supported -- are in [lytecache-cli/README.md#docker](lytecache-cli/README.md#docker).
+
 ## Developing this repo
 
 Each package builds independently:
@@ -258,7 +272,7 @@ cd lytecache-php
 composer install
 composer stan && composer pint:test && composer test
 
-# CLI (coming soon -- depends on lytecache-go, not yet published)
+# CLI (coming soon -- not yet tagged/published; lytecache-go itself now is)
 cd lytecache-cli
 go build ./... && go test -race ./...
 ```
