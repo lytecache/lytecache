@@ -244,6 +244,17 @@
          .feature{ background:var(--surface); padding:var(--space-6); }
          .feature h4{ font-size:.95rem; margin-bottom:.4em; }
          .feature p{ font-size:.85rem; color:var(--text-dim); margin:0; }
+         /* ============================= STEP LIST ============================= */
+         .steps{ list-style:none; padding:0; margin:var(--space-6) 0; counter-reset:step; display:flex; flex-direction:column; gap:var(--space-6); }
+         .steps li{ counter-increment:step; position:relative; padding-left:2.75rem; margin-bottom:0; }
+         .steps li::before{
+         content:counter(step); position:absolute; left:0; top:0; width:1.9rem; height:1.9rem; border-radius:50%;
+         background:var(--accent-soft); color:var(--accent); font-family:var(--font-display); font-weight:700; font-size:.85rem;
+         display:flex; align-items:center; justify-content:center; flex-shrink:0;
+         }
+         .steps h4{ font-size:.95rem; margin:0 0 .3em; }
+         .steps p{ font-size:.88rem; color:var(--text-dim); margin:0 0 var(--space-2); }
+         .steps .snippet{ margin:.6em 0 0; }
          /* ============================= CODE / SNIPPETS ============================= */
          .snippet{ border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin:var(--space-4) 0 var(--space-6); background:var(--surface-2); }
          .snippet-head{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5em; padding:.5em .7em; border-bottom:1px solid var(--border); }
@@ -1665,6 +1676,45 @@ samson@lytecache:~$ </code></pre>
                      <p><code>lytecache service install</code> registers it with launchd, systemd, or Windows' SCM — survives logout, restarts on boot.</p>
                   </div>
                </div>
+               <h3>Install and run it, step by step</h3>
+               <ol class="steps">
+                  <li>
+                     <h4>Install <code>lytecache</code></h4>
+                     <p>It's one binary — the CLI and the Admin UI ship together, so there's nothing separate to install for either.</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">Terminal</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="bash">brew install lytecache/tap/lytecache</code></pre>
+                     </div>
+                     <p>On Linux/Windows/from source, or want the Docker image instead? See <a href="#cli">Install</a> in the CLI section above.</p>
+                  </li>
+                  <li>
+                     <h4>Point it at a database — or don't</h4>
+                     <p>Know the path? Name it with <code>--db</code>. Not sure, or just testing? Skip this step entirely — running with zero flags auto-scans the standard cache locations for you (see the callout further down).</p>
+                  </li>
+                  <li>
+                     <h4>Run it</h4>
+                     <p>In the foreground first, to see it work — <code>Ctrl+C</code> stops it, nothing persists:</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">Terminal</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="bash">lytecache ui</code></pre>
+                     </div>
+                     <p>Happy with it? Keep it running in the background instead (survives logout and reboot) — see <a href="#ui-background">Running as a background service</a> below.</p>
+                  </li>
+                  <li>
+                     <h4>Open it and log in</h4>
+                     <p>Visit <code>http://127.0.0.1:7070</code> and log in with <code>admin</code>/<code>admin</code> — that lands you on the fleet dashboard.</p>
+                  </li>
+                  <li>
+                     <h4>Change the password before exposing it anywhere</h4>
+                     <p>Only matters if you plan to reach this from beyond <code>127.0.0.1</code> — and even then it's enforced, not just advised: binding elsewhere while the password is still <code>admin</code> refuses to start outright. Run <code>lytecache ui passwd</code> whenever you're ready for that.</p>
+                  </li>
+               </ol>
                <h3>Quickstart</h3>
                <div class="termcard linux-term" aria-label="Animated terminal session demo">
                   <div class="termcard-bar">
@@ -1734,7 +1784,11 @@ volumes:
   lytecache-ui-config:</code></pre>
                </div>
                <p><code>docker compose --profile tools up -d lytecache-ui</code>, then open <code>http://127.0.0.1:7070</code>. Note this <code>ports:</code> mapping publishes on <strong>every</strong> network interface the host has, not just loopback — fine on a machine you trust the network of, but anyone who can reach this host's IP can now reach the UI too. If that's not what you want, restrict it back to the host itself with <code>"127.0.0.1:7070:7070"</code> instead. Either way, <code>--insecure</code> is only a reasonable trade-off as long as nothing untrusted shares that reachable network — swap it for <code>--tls-cert</code>/<code>--tls-key</code> once this is reachable beyond a single machine. The full example — plus a <code>--scan</code>-based fleet view across several services' caches sharing one volume — is in <a href="https://github.com/lytecache/lytecache-cli/blob/main/examples/docker-compose.yml" target="_blank" rel="noopener">lytecache-cli's <code>examples/docker-compose.yml</code></a>.</p>
-               <h3>Running as a background service</h3>
+               <h3 id="ui-background">Running as a background service</h3>
+               <div class="callout good">
+                  <p class="eyebrow">Installed via Homebrew?</p>
+                  <p><code>service install</code> already ran for you, automatically, the moment <code>brew install</code>/<code>brew upgrade</code> finished (registered only — never started, so nothing is listening until you choose to). Skip straight to <code>lytecache service start</code> below.</p>
+               </div>
                <div class="snippet">
                   <div class="snippet-head">
                      <span class="install-label">Terminal</span>
@@ -1744,7 +1798,7 @@ volumes:
 lytecache service start
 lytecache service status</code></pre>
                </div>
-               <p>Every flag <code>lytecache ui</code> accepts is also accepted by <code>service install</code>, and gets persisted so it starts identically every time — a user LaunchAgent on macOS, a user systemd unit on Linux (<code>--system</code> for a system-wide one), and the Service Control Manager on Windows when elevated, falling back to a Scheduled Task at logon otherwise.</p>
+               <p>Every flag <code>lytecache ui</code> accepts is also accepted by <code>service install</code>, and gets persisted so it starts identically every time — a user LaunchAgent on macOS, a user systemd unit on Linux (<code>--system</code> for a system-wide one), and the Service Control Manager on Windows when elevated, falling back to a Scheduled Task at logon otherwise. Re-running <code>service install</code> any time (with different flags, e.g. to add <code>--db</code>) replaces the persisted config — no need to uninstall first.</p>
                <p>Full details — masking sensitive values, the audit log, a paste-ready Prometheus <code>scrape_config</code>, and the complete default-credential guardrail matrix — are in <a href="https://github.com/lytecache/lytecache-cli/blob/main/docs/ui.md" target="_blank" rel="noopener">lytecache-cli's <code>docs/ui.md</code></a>.</p>
             </section>
          </main>
