@@ -59,8 +59,9 @@ const (
 // operation is a single SQL statement or an explicit transaction, so
 // correctness holds across processes, not just goroutines.
 type Cache struct {
-	path      string
-	namespace string
+	path          string
+	namespace     string
+	schemaVersion int
 
 	// readDB allows multiple concurrent connections (safe under WAL mode,
 	// where readers never block a writer or each other). writeDB is
@@ -216,7 +217,8 @@ func New(opts ...Option) (*Cache, error) {
 	}
 	writeDB.SetMaxOpenConns(1)
 
-	if err := initSchemaWithRetry(writeDB); err != nil {
+	version, err := initSchemaWithRetry(writeDB)
+	if err != nil {
 		_ = writeDB.Close()
 		return nil, err
 	}
@@ -235,6 +237,7 @@ func New(opts ...Option) (*Cache, error) {
 	c := &Cache{
 		path:          path,
 		namespace:     o.namespace,
+		schemaVersion: version,
 		readDB:        readDB,
 		writeDB:       writeDB,
 		maxKeys:       o.maxKeys,
@@ -289,25 +292,26 @@ func isSQLiteBusy(err error) bool {
 // operation (a well-known SQLite cold-start race, not specific to this
 // driver) -- so this retries a handful of times on that specific error
 // before giving up.
-func initSchemaWithRetry(db *sql.DB) error {
+func initSchemaWithRetry(db *sql.DB) (int, error) {
 	const maxAttempts = 25
 	var err error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if err = initSchema(db); err == nil {
-			return nil
+		var version int
+		if version, err = initSchema(db); err == nil {
+			return version, nil
 		}
 		if !isSQLiteBusy(err) {
-			return err
+			return 0, err
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	return fmt.Errorf("lytecache: initializing schema after %d attempts: %w", maxAttempts, err)
+	return 0, fmt.Errorf("lytecache: initializing schema after %d attempts: %w", maxAttempts, err)
 }
 
-func initSchema(db *sql.DB) error {
+func initSchema(db *sql.DB) (int, error) {
 	ctx := context.Background()
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
-		return fmt.Errorf("lytecache: applying schema: %w", err)
+		return 0, fmt.Errorf("lytecache: applying schema: %w", err)
 	}
 
 	var versionText string
@@ -316,26 +320,55 @@ func initSchema(db *sql.DB) error {
 	case errors.Is(err, sql.ErrNoRows):
 		if _, err := db.ExecContext(ctx,
 			`INSERT OR IGNORE INTO meta (k, v) VALUES ('schema_version', '1')`); err != nil {
-			return fmt.Errorf("lytecache: recording schema version: %w", err)
+			return 0, fmt.Errorf("lytecache: recording schema version: %w", err)
 		}
-		return nil
+		return 1, nil
 	case err != nil:
-		return fmt.Errorf("lytecache: reading schema version: %w", err)
+		return 0, fmt.Errorf("lytecache: reading schema version: %w", err)
 	}
 
 	var version int
 	if _, err := fmt.Sscanf(versionText, "%d", &version); err != nil {
-		return fmt.Errorf("lytecache: parsing schema version %q: %w", versionText, err)
+		return 0, fmt.Errorf("lytecache: parsing schema version %q: %w", versionText, err)
 	}
 	if version > schemaVersion {
-		return fmt.Errorf("%w: file has schema_version=%d, this version of lytecache supports up to %d",
+		return 0, fmt.Errorf("%w: file has schema_version=%d, this version of lytecache supports up to %d",
 			ErrSchemaVersion, version, schemaVersion)
 	}
-	return nil
+	return version, nil
 }
 
 // Path returns this instance's actual database file path.
 func (c *Cache) Path() string { return c.path }
+
+// SchemaVersion returns the on-disk schema_version this file was opened
+// with. It is always <= the version this build understands -- New refuses
+// to open a file with a newer schema_version than it supports (see
+// [ErrSchemaVersion]).
+func (c *Cache) SchemaVersion() int { return c.schemaVersion }
+
+// Limits reports the capacity limits this Cache was constructed with (see
+// [WithMaxKeys], [WithMaxBytes]). A nil field means that limit was not set
+// (unbounded). Intended for introspection/admin tooling; ordinary
+// applications already know their own configured limits.
+type Limits struct {
+	MaxKeys  *int64
+	MaxBytes *int64
+}
+
+// Limits returns this Cache's configured capacity limits.
+func (c *Cache) Limits() Limits {
+	l := Limits{}
+	if c.maxKeys != nil {
+		v := *c.maxKeys
+		l.MaxKeys = &v
+	}
+	if c.maxBytes != nil {
+		v := *c.maxBytes
+		l.MaxBytes = &v
+	}
+	return l
+}
 
 // Close flushes any buffered state, stops the background sweeper if one is
 // running, and closes the underlying database connections. Close is

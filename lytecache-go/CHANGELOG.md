@@ -2,7 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-08-07
+
+- `Cache.Namespaces()`: enumerates every namespace present in a database file (key count, size on
+  disk, expired-but-not-yet-swept count per namespace), regardless of which namespace the `Cache`
+  itself is pinned to. A pure read against the read connection pool -- unlike `Get`/`Inspect`, it
+  never opportunistically deletes expired rows or updates LRU bookkeeping, so it's safe to call on
+  a fixed polling interval.
+- `Cache.SchemaVersion()`: exposes the on-disk `schema_version` a file was opened with (previously
+  read internally at open time but never surfaced).
+- `Cache.Limits()`: exposes the `MaxKeys`/`MaxBytes` capacity limits a `Cache` was constructed with
+  (previously private fields with no accessor).
+- `Stats.ExpiredPresent`: count of keys in a namespace past their `expires_at` but not yet swept --
+  a healthy cache keeps this at or near zero.
+
+These four additions exist specifically so [lytecache-cli](https://github.com/lytecache/lytecache-cli)'s
+`ui` web admin command can render a per-namespace, per-file fleet dashboard and Prometheus metrics
+through the public API alone, with no raw SQL in the UI layer.
 
 ## [0.2.0] - 2026-07-09
 

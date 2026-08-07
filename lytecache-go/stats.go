@@ -17,6 +17,10 @@ type Stats struct {
 	SizeBytes      int64
 	Evictions      int64
 	ExpiredRemoved int64
+	// ExpiredPresent is the number of keys in this namespace past their
+	// expires_at but not yet swept -- a healthy cache keeps this at or near
+	// zero; a growing value indicates the sweeper isn't keeping up.
+	ExpiredPresent int64
 	Path           string
 }
 
@@ -24,10 +28,13 @@ type Stats struct {
 func (c *Cache) Stats() (Stats, error) {
 	c.flushLRUBuffer()
 
-	var keyCount int64
+	var keyCount, expiredPresent int64
 	var sizeBytes sql.NullInt64
-	err := c.readDB.QueryRow(`SELECT COUNT(*), SUM(size_bytes) FROM cache WHERE namespace = ?`, c.namespace).
-		Scan(&keyCount, &sizeBytes)
+	err := c.readDB.QueryRow(`
+SELECT COUNT(*), SUM(size_bytes),
+       COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at <= ? THEN 1 ELSE 0 END), 0)
+FROM cache WHERE namespace = ?`, nowMillis(), c.namespace).
+		Scan(&keyCount, &sizeBytes, &expiredPresent)
 	if err != nil {
 		return Stats{}, fmt.Errorf("lytecache: stats: %w", err)
 	}
@@ -47,6 +54,7 @@ func (c *Cache) Stats() (Stats, error) {
 		SizeBytes:      sizeBytes.Int64,
 		Evictions:      c.evictions.Load(),
 		ExpiredRemoved: c.expiredRemoved.Load(),
+		ExpiredPresent: expiredPresent,
 		Path:           c.path,
 	}, nil
 }
