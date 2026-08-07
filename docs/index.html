@@ -1754,7 +1754,7 @@ read-only (pass --allow-delete to enable delete/flush/maintain)</code></pre>
   -v lytecache-ui-config:/home/lytecache/.config/lytecache \
   -e LYTECACHE_UI_PASSWORD=change-me \
   ghcr.io/lytecache/lytecache:latest \
-  ui --host 0.0.0.0 --insecure --db orders=/var/cache/lytecache/orders.db</code></pre>
+  ui --host 0.0.0.0 --insecure --no-metrics --db orders=/var/cache/lytecache/orders.db</code></pre>
                </div>
                <p>Mount the config volume, not just the cache data volume — <code>ui.yaml</code> holds the credentials and session secret, and without it persisted, the admin password resets to <code>admin</code>/<code>admin</code> on every container recreation.</p>
                <p>With Compose, add it as a profiled service alongside whatever already runs your app — matching its <code>LYTECACHE_PATH</code> and mounting the same named volume is what makes <code>--db</code> unnecessary, same as the CLI service above:</p>
@@ -1769,7 +1769,7 @@ read-only (pass --allow-delete to enable delete/flush/maintain)</code></pre>
   lytecache-ui:
     image: ghcr.io/lytecache/lytecache:latest
     profiles: ["tools"]     # keeps it out of `docker compose up`
-    command: ["ui", "--host", "0.0.0.0", "--port", "7070", "--allow-delete", "--insecure"]
+    command: ["ui", "--host", "0.0.0.0", "--port", "7070", "--allow-delete", "--insecure", "--no-metrics"]
     environment:
       LYTECACHE_PATH: /var/cache/lytecache/cache.db   # same value your app sets
       LYTECACHE_UI_PASSWORD: ${LYTECACHE_UI_PASSWORD:?set a real admin password first}
@@ -1784,6 +1784,61 @@ volumes:
   lytecache-ui-config:</code></pre>
                </div>
                <p><code>docker compose --profile tools up -d lytecache-ui</code>, then open <code>http://127.0.0.1:7070</code>. Note this <code>ports:</code> mapping publishes on <strong>every</strong> network interface the host has, not just loopback — fine on a machine you trust the network of, but anyone who can reach this host's IP can now reach the UI too. If that's not what you want, restrict it back to the host itself with <code>"127.0.0.1:7070:7070"</code> instead. Either way, <code>--insecure</code> is only a reasonable trade-off as long as nothing untrusted shares that reachable network — swap it for <code>--tls-cert</code>/<code>--tls-key</code> once this is reachable beyond a single machine. The full example — plus a <code>--scan</code>-based fleet view across several services' caches sharing one volume — is in <a href="https://github.com/lytecache/lytecache-cli/blob/main/examples/docker-compose.yml" target="_blank" rel="noopener">lytecache-cli's <code>examples/docker-compose.yml</code></a>.</p>
+               <h3 id="ui-multi-service">Multiple app services, one Admin UI</h3>
+               <p>The single most common setup mistake: if each of your app services caches to its own file or volume, <code>lytecache-ui</code> has to actually mount the <em>same</em> volume(s) they write to. Pointing it at a leftover or unrelated volume "works" in the sense that the container starts fine — it just shows an empty dashboard, because it's genuinely looking at a different place than your app does.</p>
+               <p>Two patterns handle this correctly, trading a bit of setup for a bit of isolation:</p>
+               <div class="fit-grid">
+                  <div class="fit-col">
+                     <h3><span class="fit-mark yes">✓</span> One shared volume, one file per service</h3>
+                     <ul>
+                        <li>Each service gets its own <code>LYTECACHE_PATH</code> filename (<code>admin.db</code>, <code>pos.db</code>, ...) but mounts the <em>same</em> volume</li>
+                        <li><code>lytecache-ui</code> mounts that one volume and uses <code>--scan</code> — new services need zero <code>lytecache-ui</code> changes</li>
+                        <li>Recommended default for most fleets</li>
+                     </ul>
+                  </div>
+                  <div class="fit-col">
+                     <h3><span class="fit-mark no">✕</span> One shared file for everything</h3>
+                     <ul>
+                        <li>Every service's writes serialize against <em>every other</em> service's writes, not just its own — SQLite's single-writer model has no concept of "unrelated" callers</li>
+                        <li>One corrupted/locked file takes down cache access for your whole fleet at once, not just the service that caused it</li>
+                        <li>Collapses the dashboard to one row instead of one per service</li>
+                        <li>Not recommended unless you've implemented per-service namespace isolation in application code (see below) and accept the write-contention trade-off</li>
+                     </ul>
+                  </div>
+               </div>
+               <p>A third option — one <em>separate</em> volume per service, exactly as isolated as separate files, just more explicit — works too: mount all of them into <code>lytecache-ui</code>, each at its own subdirectory, and use repeatable <code>--db name=path</code> flags instead of <code>--scan</code>. More manual wiring per new service, but a lock or corruption issue in one file can't touch any other.</p>
+               <div class="table-wrap">
+                  <table>
+                     <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+                     <tbody>
+                        <tr>
+                           <td>Dashboard shows "No databases configured", or a database with zero keys</td>
+                           <td><code>lytecache-ui</code> mounts a different volume than your app services actually write to</td>
+                           <td>Mount the exact same volume(s) your services use — never a separate one "for the UI"</td>
+                        </tr>
+                        <tr>
+                           <td>A <code>LYTECACHE_NAMESPACE</code> (or similarly-named) env var seems to do nothing</td>
+                           <td>It isn't a real setting — no implementation reads it from the environment</td>
+                           <td>Isolate services by <em>file</em> (distinct <code>LYTECACHE_PATH</code> per service), or by namespace via <code>WithNamespace(...)</code> in actual application code</td>
+                        </tr>
+                        <tr>
+                           <td><code>docker compose run lytecache-cli stats</code> always shows the same one service's data, or a file that doesn't exist</td>
+                           <td>A shared <code>LYTECACHE_PATH</code> env var (often via a YAML anchor reused across services) defaults it to one fixed file</td>
+                           <td>Drop the default and pass <code>--db /path/to/service.db</code> explicitly on each invocation instead</td>
+                        </tr>
+                        <tr>
+                           <td><code>service "x" refers to undefined volume "y": invalid compose project</code></td>
+                           <td>A service's <code>volumes:</code> references a name that was never declared at the top level</td>
+                           <td>Every volume name used anywhere in the file must also appear under the top-level <code>volumes:</code> key</td>
+                        </tr>
+                        <tr>
+                           <td>Every app service looks migrated to the new volume layout, but the dashboard is still empty</td>
+                           <td><code>lytecache-ui</code> itself didn't get updated — easy to update every app service and forget the one service that actually has to see all of them</td>
+                           <td>Double-check <code>lytecache-ui</code>'s own <code>volumes:</code>/<code>command:</code> match whatever your app services just moved to</td>
+                        </tr>
+                     </tbody>
+                  </table>
+               </div>
                <h3 id="ui-background">Running as a background service</h3>
                <div class="callout good">
                   <p class="eyebrow">Installed via Homebrew?</p>
