@@ -404,7 +404,8 @@
             </div>
             <div class="nav-group">
                <div class="nav-group-title">Tooling</div>
-               <a href="#cli">CLI <span class="soon-tag">soon</span></a>
+               <a href="#cli">CLI</a>
+               <a href="#ui">Admin UI</a>
             </div>
          </aside>
          <main id="top">
@@ -1483,11 +1484,7 @@ def expensive(x):
             </section>
             <section class="section" id="cli">
                <p class="eyebrow">Tooling</p>
-               <h2>Command-line interface <span class="soon-tag">coming soon</span></h2>
-               <div class="callout">
-                  <p class="eyebrow">Not released yet</p>
-                  <p>The <code>lytecache</code> CLI is built and tested, just not published yet. Watch <a href="https://github.com/lytecache/lytecache-cli" target="_blank" rel="noopener">github.com/lytecache/lytecache-cli</a> for the first release.</p>
-               </div>
+               <h2>Command-line interface</h2>
                <p class="lead">Inspect and manipulate any lytecache database file from a shell, the way <code>redis-cli</code> does for a server. It's built entirely on <a href="https://github.com/lytecache/lytecache-go" target="_blank" rel="noopener">lytecache-go</a>'s public API, so it can read and write a file created by any of the five languages above.</p>
                <h3>Install</h3>
                <div class="snippet">
@@ -1640,6 +1637,114 @@ samson@lytecache:~$ </code></pre>
 }</code></pre>
                </div>
                <p>No Python installation, no shared server, no export step: just the same SQLite file on disk. The two type codes the CLI can't decode — 5 for Python pickle, 6 for Java serialization — render as <code>(non-portable value: python-pickle, N bytes)</code> instead of erroring out or dumping garbage.</p>
+               <div class="callout good">
+                  <p class="eyebrow">Prefer a browser?</p>
+                  <p>Everything above also works as a web console — see <a href="#ui">Admin UI</a> below.</p>
+               </div>
+            </section>
+            <section class="section" id="ui">
+               <p class="eyebrow">Tooling</p>
+               <h2>Admin UI</h2>
+               <p class="lead">A local web console for the same database files the CLI reads — think RedisInsight or pgAdmin, not a cache server. It has no wire protocol and no application ever connects to it; it's <code>lytecache-go</code>'s public API with a browser on top, launched with <code>lytecache ui --port 7070</code>.</p>
+               <p>It ships in the exact same binary as the CLI above — there's no separate install. If you haven't installed <code>lytecache</code> yet, see <a href="#cli">Install</a> in the CLI section, or jump straight to <a href="#ui-docker">Docker</a> below if you'd rather not install anything locally at all.</p>
+               <div class="feature-grid">
+                  <div class="feature">
+                     <h4>Fleet dashboard</h4>
+                     <p>Every configured database side by side — key count, size, hit rate, evictions, and a health flag when usage or expired-present counts creep up.</p>
+                  </div>
+                  <div class="feature">
+                     <h4>Delete-only, on purpose</h4>
+                     <p>It can remove data — never create or alter it. There's no route that accepts a new or edited value; the handler doesn't exist to reach.</p>
+                  </div>
+                  <div class="feature">
+                     <h4>Prometheus <code>/metrics</code></h4>
+                     <p>Per-database gauges for key count, size, evictions, and expired-present, scraped from zero-write library calls.</p>
+                  </div>
+                  <div class="feature">
+                     <h4>Runs in the background</h4>
+                     <p><code>lytecache service install</code> registers it with launchd, systemd, or Windows' SCM — survives logout, restarts on boot.</p>
+                  </div>
+               </div>
+               <h3>Quickstart</h3>
+               <div class="termcard linux-term" aria-label="Animated terminal session demo">
+                  <div class="termcard-bar">
+                     <span class="termcard-title">samson@lytecache: ~</span>
+                     <span class="win-controls" aria-hidden="true"><span>&#8722;</span><span>&#9633;</span><span>&#10005;</span></span>
+                  </div>
+                  <pre><code class="term-output" id="uiTermOutput"></code></pre>
+               </div>
+               <noscript>
+                  <div class="snippet">
+                     <pre><code data-syntax="bash">samson@lytecache:~$ lytecache ui --db orders=/var/cache/lytecache/orders.db
+first run: created /Users/samson/.config/lytecache/ui.yaml
+generated admin credentials -- username: admin  password: admin
+change this with 'lytecache ui passwd', especially before binding beyond 127.0.0.1
+lytecache ui listening on http://127.0.0.1:7070
+read-only (pass --allow-delete to enable delete/flush/maintain)</code></pre>
+                  </div>
+               </noscript>
+               <p>Open <code>http://127.0.0.1:7070</code>, log in with <code>admin</code>/<code>admin</code>, and you're at the fleet dashboard. Passing <code>--allow-delete</code> turns on delete/flush/maintain; without it, those routes return 403 whether or not the browser shows a button for them.</p>
+               <h3>Using it</h3>
+               <p>Click any database row to drill into its key browser. The sidebar lists every namespace <strong>with its key count</strong>, so a mismatched namespace — the single most common "my key isn't there" surprise — is hard to miss. Click a key to open the value viewer: JSON pretty-printed and collapsible, everything else masked behind a "Reveal value" click until you ask for it. With <code>--allow-delete</code>, a delete button appears there too, plus bulk delete and a flush-namespace control that requires typing the namespace name back — no accidental wipes from a stray click.</p>
+               <p><code>/</code> focuses the search box from anywhere (it searches every configured database, not just the one you're in); arrow keys move through a key list, <code>Esc</code> clears the current selection or search.</p>
+               <div class="callout">
+                  <p class="eyebrow">Guardrails, not a settings screen</p>
+                  <p>Binding to anything other than <code>127.0.0.1</code> while the password is still <code>admin</code> refuses to start outright, and reaching it non-locally with a reset default password forces a password change before anything else is reachable — neither is a flag you can turn off. Reaching a remote instance? Prefer an SSH tunnel (<code>ssh -L 7070:localhost:7070 you@host</code>) over exposing the port at all.</p>
+               </div>
+               <h3 id="ui-docker">Docker</h3>
+               <p>The image ships the <code>ui</code> subcommand too — bind <code>0.0.0.0</code> <em>inside</em> the container (a loopback bind is unreachable through published ports regardless of Docker's NAT rules) and re-restrict back to <code>127.0.0.1</code> on the host side:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">docker run --rm -p 127.0.0.1:7070:7070 \
+  -v myapp-cache:/var/cache/lytecache \
+  -v lytecache-ui-config:/home/lytecache/.config/lytecache \
+  -e LYTECACHE_UI_PASSWORD=change-me \
+  ghcr.io/lytecache/lytecache:latest \
+  ui --host 0.0.0.0 --insecure --db orders=/var/cache/lytecache/orders.db</code></pre>
+               </div>
+               <p>Mount the config volume, not just the cache data volume — <code>ui.yaml</code> holds the credentials and session secret, and without it persisted, the admin password resets to <code>admin</code>/<code>admin</code> on every container recreation.</p>
+               <p>With Compose, add it as a profiled service alongside whatever already runs your app — matching its <code>LYTECACHE_PATH</code> and mounting the same named volume is what makes <code>--db</code> unnecessary, same as the CLI service above:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">docker-compose.yml</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="yaml">services:
+  # ... your existing app service ...
+
+  lytecache-ui:
+    image: ghcr.io/lytecache/lytecache:latest
+    profiles: ["tools"]     # keeps it out of `docker compose up`
+    command: ["ui", "--host", "0.0.0.0", "--port", "7070", "--allow-delete", "--insecure"]
+    environment:
+      LYTECACHE_PATH: /var/cache/lytecache/cache.db   # same value your app sets
+      LYTECACHE_UI_PASSWORD: ${LYTECACHE_UI_PASSWORD:?set a real admin password first}
+    volumes:
+      - lytecache-data:/var/cache/lytecache            # same volume your app mounts
+      - lytecache-ui-config:/home/lytecache/.config/lytecache
+    ports:
+      - "7070:7070"
+
+volumes:
+  lytecache-data:
+  lytecache-ui-config:</code></pre>
+               </div>
+               <p><code>docker compose --profile tools up -d lytecache-ui</code>, then open <code>http://127.0.0.1:7070</code>. Note this <code>ports:</code> mapping publishes on <strong>every</strong> network interface the host has, not just loopback — fine on a machine you trust the network of, but anyone who can reach this host's IP can now reach the UI too. If that's not what you want, restrict it back to the host itself with <code>"127.0.0.1:7070:7070"</code> instead. Either way, <code>--insecure</code> is only a reasonable trade-off as long as nothing untrusted shares that reachable network — swap it for <code>--tls-cert</code>/<code>--tls-key</code> once this is reachable beyond a single machine. The full example — plus a <code>--scan</code>-based fleet view across several services' caches sharing one volume — is in <a href="https://github.com/lytecache/lytecache-cli/blob/main/examples/docker-compose.yml" target="_blank" rel="noopener">lytecache-cli's <code>examples/docker-compose.yml</code></a>.</p>
+               <h3>Running as a background service</h3>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">lytecache service install --db orders=/data/orders.db --allow-delete
+lytecache service start
+lytecache service status</code></pre>
+               </div>
+               <p>Every flag <code>lytecache ui</code> accepts is also accepted by <code>service install</code>, and gets persisted so it starts identically every time — a user LaunchAgent on macOS, a user systemd unit on Linux (<code>--system</code> for a system-wide one), and the Service Control Manager on Windows when elevated, falling back to a Scheduled Task at logon otherwise.</p>
+               <p>Full details — masking sensitive values, the audit log, a paste-ready Prometheus <code>scrape_config</code>, and the complete default-credential guardrail matrix — are in <a href="https://github.com/lytecache/lytecache-cli/blob/main/docs/ui.md" target="_blank" rel="noopener">lytecache-cli's <code>docs/ui.md</code></a>.</p>
             </section>
          </main>
       </div>
@@ -2050,6 +2155,53 @@ samson@lytecache:~$ </code></pre>
                  }, 14);
                }
                typeCliDemo();
+             }
+           }
+
+           /* ---------- Admin UI terminal typing demo (same technique as the CLI's) ---------- */
+           var uiTermEl = document.getElementById("uiTermOutput");
+           if (uiTermEl){
+             var uiDemo = [
+               'samson@lytecache:~$ lytecache ui --db orders=/var/cache/lytecache/orders.db',
+               'first run: created /Users/samson/.config/lytecache/ui.yaml',
+               'generated admin credentials -- username: admin  password: admin',
+               'change this with \'lytecache ui passwd\', especially before binding beyond 127.0.0.1',
+               'lytecache ui listening on http://127.0.0.1:7070',
+               'read-only (pass --allow-delete to enable delete/flush/maintain)'
+             ].join("\n");
+             var uiPromptPattern = /^([\w.-]+@[\w.-]+)(:[^\s$#]*)([$#] ?)(.*)$/;
+             function renderUiDemo(text, withCursor){
+               var html = text.split("\n").map(function(line){
+                 var m = line.match(uiPromptPattern);
+                 if (!m) return highlight(line, "bash");
+                 return '<span class="tok-prompt-user">' + escapeHtml(m[1]) + '</span>' +
+                   '<span class="tok-prompt-path">' + escapeHtml(m[2]) + '</span>' +
+                   escapeHtml(m[3]) + highlight(m[4], "bash");
+               }).join("\n");
+               if (withCursor) html += '<span class="cursor"></span>';
+               uiTermEl.innerHTML = html;
+             }
+             if (reduceMotion){
+               renderUiDemo(uiDemo, false);
+             } else {
+               var uiTyper = null;
+               var uiRestartTimer = null;
+               function typeUiDemo(){
+                 clearInterval(uiTyper);
+                 clearTimeout(uiRestartTimer);
+                 var i = 0;
+                 renderUiDemo("", true);
+                 uiTyper = setInterval(function(){
+                   i += 2;
+                   var done = i >= uiDemo.length;
+                   renderUiDemo(uiDemo.slice(0, done ? uiDemo.length : i), true);
+                   if (done){
+                     clearInterval(uiTyper);
+                     uiRestartTimer = setTimeout(typeUiDemo, 3200);
+                   }
+                 }, 14);
+               }
+               typeUiDemo();
              }
            }
          })();

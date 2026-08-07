@@ -22,7 +22,7 @@ This repository is a **monorepo** containing independent, same-spec implementati
 | [`lytecache-node/`](lytecache-node/) | ![Node.js](https://img.shields.io/badge/-Node.js-339933?style=flat-square&logo=node.js&logoColor=white) Node.js 18+ | `npm install lytecache` | [lytecache-node/README.md](lytecache-node/README.md) |
 | [`lytecache-go/`](lytecache-go/) | ![Go](https://img.shields.io/badge/-Go-00ADD8?style=flat-square&logo=go&logoColor=white) Go 1.25+ | `go get github.com/lytecache/lytecache-go` | [lytecache-go/README.md](lytecache-go/README.md) |
 | [`lytecache-php/`](lytecache-php/) | ![PHP](https://img.shields.io/badge/-PHP-777BB4?style=flat-square&logo=php&logoColor=white) PHP 8.2+ | `composer require lytecache/lytecache` | [lytecache-php/README.md](lytecache-php/README.md) |
-| [`lytecache-cli/`](lytecache-cli/) | ![Go](https://img.shields.io/badge/-Go-00ADD8?style=flat-square&logo=go&logoColor=white) CLI tool (built on lytecache-go) | **Coming soon** | [lytecache-cli/README.md](lytecache-cli/README.md) |
+| [`lytecache-cli/`](lytecache-cli/) | ![Go](https://img.shields.io/badge/-Go-00ADD8?style=flat-square&logo=go&logoColor=white) CLI tool + web admin UI (built on lytecache-go) | `brew install lytecache/tap/lytecache` | [lytecache-cli/README.md](lytecache-cli/README.md) |
 
 More languages are expected to join this list over time — the storage spec below is the contract any implementation needs to satisfy. They share one on-disk [storage spec](#storage-spec--cross-language-compatibility): a cache file written by one is readable — and, for counters, atomically incrementable — by any of the others. Everything below is a quick tour; each package's own README is the full reference for that language.
 
@@ -231,9 +231,9 @@ A handful of abbreviations show up above without being spelled out inline. Here'
 
 ## Docker
 
-`lytecache` itself has no server mode -- there's nothing to containerize as a service. What *is* published as a multi-arch (`linux/amd64`/`linux/arm64`) container image is the [CLI](lytecache-cli/): a ~7 MB `scratch`-based image (**coming soon** -- not tagged/published yet, see [lytecache-cli/RELEASING.md](lytecache-cli/RELEASING.md)) that runs one command and exits, for inspecting or editing a cache file without installing Go.
+`lytecache` itself has no cache-server mode -- there's nothing to containerize as a network service the way you would Redis. What *is* published as a multi-arch (`linux/amd64`/`linux/arm64`) container image is the [CLI](lytecache-cli/): a ~7 MB `scratch`-based image at `ghcr.io/lytecache/lytecache` that, for one-shot commands, runs one command and exits, for inspecting or editing a cache file without installing Go. It also ships the [web admin UI](#admin-ui-lytecache-ui) below, which is the one long-running exception -- see that section for its Docker setup.
 
-The pattern that matters: mount whatever volume your application already mounts its cache on at `/var/cache/lytecache`, and set `LYTECACHE_PATH` to the same value the app uses -- the CLI then needs no `--db` flag, because it resolves that env var exactly the way every library above does.
+The pattern that matters for one-shot commands: mount whatever volume your application already mounts its cache on at `/var/cache/lytecache`, and set `LYTECACHE_PATH` to the same value the app uses -- the CLI then needs no `--db` flag, because it resolves that env var exactly the way every library above does.
 
 ```bash
 docker run --rm -v myapp-cache:/var/cache/lytecache \
@@ -242,6 +242,32 @@ docker run --rm -v myapp-cache:/var/cache/lytecache \
 ```
 
 With Compose, `docker compose run --rm lytecache-cli stats` does the same thing if both services mount the same named volume (see [`lytecache-cli/examples/docker-compose.yml`](lytecache-cli/examples/docker-compose.yml)). Full details -- inspecting an arbitrary host file with `--db`, the interactive REPL, embedding the binary in your own image via `COPY --from=`, a shell alias, and why sharing one `.db` file over NFS/Kubernetes `ReadWriteMany` isn't supported -- are in [lytecache-cli/README.md#docker](lytecache-cli/README.md#docker).
+
+## Admin UI (`lytecache ui`)
+
+The [CLI](lytecache-cli/) also includes a local web admin console -- a RedisInsight/pgAdmin-style tool for inspecting and cleaning up cache files, across several databases at once, from a browser. It's not a cache server either: no wire protocol, nothing an application ever connects to, just an HTTP UI that reads and writes the same files through the same library API everything else in this repo uses.
+
+**From the terminal**, once the CLI is installed (see the package table above):
+
+```bash
+lytecache ui --db orders=/path/to/orders.db
+# -> http://127.0.0.1:7070, first-run credentials admin/admin
+```
+
+That's a fleet dashboard across every `--db`/`--scan`-configured database, a namespace-aware key browser, a value viewer, and cross-database search -- all read-only until you pass `--allow-delete`, which is the only way to unlock deletion (there is no route, anywhere, that can create or edit a value -- see [lytecache-cli/docs/ui.md](lytecache-cli/docs/ui.md#the-delete-only-capability-model)). Run it as a background service that survives logout and restarts on boot with `lytecache service install && lytecache service start` (macOS/Linux/Windows, via `kardianos/service`).
+
+**In Docker**, the same image runs it too. `--host 0.0.0.0` is required inside the container for Docker's port publishing to reach it at all; mount a config volume separately from the cache data volume, or the admin password resets on every container recreation:
+
+```bash
+docker run --rm -p 127.0.0.1:7070:7070 \
+  -v myapp-cache:/var/cache/lytecache \
+  -v lytecache-ui-config:/home/lytecache/.config/lytecache \
+  -e LYTECACHE_PATH=/var/cache/lytecache/cache.db \
+  -e LYTECACHE_UI_PASSWORD=a-real-password \
+  ghcr.io/lytecache/lytecache:latest ui --host 0.0.0.0 --insecure
+```
+
+Then open `http://127.0.0.1:7070` -- the `-p 127.0.0.1:...` mapping keeps it reachable only from the machine running Docker, even though the container binds `0.0.0.0` internally (required for Docker's networking, not the same thing as being reachable from anywhere else). `LYTECACHE_UI_PASSWORD` provisions a real password on first run instead of the public default, which the UI refuses to serve on anything but `127.0.0.1` in the first place. See [`lytecache-cli/examples/docker-compose.yml`](lytecache-cli/examples/docker-compose.yml) for a complete Compose service (including a `--scan`-based fleet view across several services' caches at once) and [lytecache-cli/docs/ui.md](lytecache-cli/docs/ui.md) for the full guide: multi-database configuration, `/metrics` for Prometheus, the SSH-tunnel recommendation, exposure guardrails, and masking sensitive values.
 
 ## Developing this repo
 
@@ -272,7 +298,7 @@ cd lytecache-php
 composer install
 composer stan && composer pint:test && composer test
 
-# CLI (coming soon -- not yet tagged/published; lytecache-go itself now is)
+# CLI (includes `lytecache ui`, the web admin console)
 cd lytecache-cli
 go build ./... && go test -race ./...
 ```
