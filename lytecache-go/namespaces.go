@@ -37,7 +37,7 @@ ORDER BY namespace`
 	if err != nil {
 		return nil, fmt.Errorf("lytecache: namespaces: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []NamespaceInfo
 	for rows.Next() {
