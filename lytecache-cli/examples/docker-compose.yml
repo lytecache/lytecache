@@ -61,6 +61,7 @@ services:
 
   lytecache-cli:
     image: ghcr.io/lytecache/lytecache:latest
+    pull_policy: always # always check for a newer :latest before (re)creating
     profiles: ["tools"] # does not start with `docker compose up`
     environment:
       LYTECACHE_PATH: /var/cache/lytecache/cache.db
@@ -69,6 +70,7 @@ services:
 
   lytecache-ui:
     image: ghcr.io/lytecache/lytecache:latest
+    pull_policy: always # always check for a newer :latest before (re)creating
     profiles: ["tools"]
     command: ["ui", "--host", "0.0.0.0", "--port", "7070", "--allow-delete", "--insecure", "--no-metrics"]
     environment:
@@ -115,6 +117,7 @@ services:
   # start first silently decides the shared login for both.
   lytecache-ui-fleet:
     image: ghcr.io/lytecache/lytecache:latest
+    pull_policy: always # always check for a newer :latest before (re)creating
     profiles: ["tools"]
     command: ["ui", "--host", "0.0.0.0", "--scan", "/scan", "--port", "7070", "--insecure", "--no-metrics"]
     environment:

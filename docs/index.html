@@ -1768,6 +1768,7 @@ read-only (pass --allow-delete to enable delete/flush/maintain)</code></pre>
 
   lytecache-ui:
     image: ghcr.io/lytecache/lytecache:latest
+    pull_policy: always    # always check for a newer :latest before (re)creating
     profiles: ["tools"]     # keeps it out of `docker compose up`
     command: ["ui", "--host", "0.0.0.0", "--port", "7070", "--allow-delete", "--insecure", "--no-metrics"]
     environment:
@@ -1784,6 +1785,21 @@ volumes:
   lytecache-ui-config:</code></pre>
                </div>
                <p><code>docker compose --profile tools up -d lytecache-ui</code>, then open <code>http://127.0.0.1:7070</code>. Note this <code>ports:</code> mapping publishes on <strong>every</strong> network interface the host has, not just loopback — fine on a machine you trust the network of, but anyone who can reach this host's IP can now reach the UI too. If that's not what you want, restrict it back to the host itself with <code>"127.0.0.1:7070:7070"</code> instead. Either way, <code>--insecure</code> is only a reasonable trade-off as long as nothing untrusted shares that reachable network — swap it for <code>--tls-cert</code>/<code>--tls-key</code> once this is reachable beyond a single machine. The full example — plus a <code>--scan</code>-based fleet view across several services' caches sharing one volume — is in <a href="https://github.com/lytecache/lytecache-cli/blob/main/examples/docker-compose.yml" target="_blank" rel="noopener">lytecache-cli's <code>examples/docker-compose.yml</code></a>.</p>
+               <h3>Pulling a newer image</h3>
+               <p>Docker doesn't re-fetch an already-present <code>:latest</code> image just because a newer one exists in the registry — <code>docker compose up</code> alone will happily keep running whatever you already have cached locally. Two ways to actually get the newer one:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash"># pull, then recreate the container so it actually uses what was just pulled
+docker compose pull lytecache-ui
+docker compose up -d --force-recreate lytecache-ui
+
+# or do both in one command
+docker compose up -d --pull always lytecache-ui</code></pre>
+               </div>
+               <p>To make this the default without remembering a flag every time, add <code>pull_policy: always</code> to the service (already in the snippet above) — then a plain <code>docker compose up -d lytecache-ui</code> always checks for a newer <code>:latest</code> first.</p>
                <h3 id="ui-multi-service">Multiple app services, one Admin UI</h3>
                <p>The single most common setup mistake: if each of your app services caches to its own file or volume, <code>lytecache-ui</code> has to actually mount the <em>same</em> volume(s) they write to. Pointing it at a leftover or unrelated volume "works" in the sense that the container starts fine — it just shows an empty dashboard, because it's genuinely looking at a different place than your app does.</p>
                <p>Two patterns handle this correctly, trading a bit of setup for a bit of isolation:</p>
