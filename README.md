@@ -308,3 +308,6 @@ See [lytecache-python/README.md](lytecache-python/README.md), [lytecache-java/RE
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+
+<!-- Security scan triggered at 2026-09-05 07:53:58 -->
