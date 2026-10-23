@@ -93,8 +93,10 @@ final class Subscription implements \IteratorAggregate
                 if ($prefix === '') {
                     return '1';
                 }
-                $clauses[] = "substr(channel, 1, :n{$i}) = :c{$i}";
-                $params[":n{$i}"] = mb_strlen($prefix, 'UTF-8');
+                // length() and substr() both count characters on TEXT, so SQLite
+                // measures the prefix with the same semantics it slices with.
+                $clauses[] = "substr(channel, 1, length(:n{$i})) = :c{$i}";
+                $params[":n{$i}"] = $prefix;
                 $params[":c{$i}"] = $prefix;
             } else {
                 $clauses[] = "channel = :c{$i}";

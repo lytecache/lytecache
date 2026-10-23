@@ -3,7 +3,14 @@
     "description": "Redis-like caching with zero infrastructure -- an embedded, SQLite-backed cache for PHP and Laravel.",
     "type": "library",
     "license": "Apache-2.0",
-    "keywords": ["cache", "sqlite", "redis-alternative", "laravel", "ttl", "embedded"],
+    "keywords": [
+        "cache",
+        "sqlite",
+        "redis-alternative",
+        "laravel",
+        "ttl",
+        "embedded"
+    ],
     "homepage": "https://lytecache.github.io/lytecache",
     "support": {
         "issues": "https://github.com/lytecache/lytecache/issues",
@@ -12,6 +19,8 @@
     },
     "require": {
         "php": "^8.2",
+        "ext-filter": "*",
+        "ext-json": "*",
         "ext-pdo": "*",
         "ext-pdo_sqlite": "*"
     },
@@ -28,6 +37,9 @@
         "phpunit/phpunit": "^11.5"
     },
     "autoload": {
+        "files": [
+            "src/platform_guard.php"
+        ],
         "psr-4": {
             "Lytecache\\": "src/"
         }
@@ -47,7 +59,8 @@
         "sort-packages": true,
         "allow-plugins": {
             "phpstan/extension-installer": true
-        }
+        },
+        "platform-check": true
     },
     "extra": {
         "laravel": {

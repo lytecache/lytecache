@@ -1,0 +1,14 @@
+# What ships in the package. Packagist serves GitHub's zipball, which honours
+# export-ignore: everything listed here stays in the repository but is left out
+# of the archive users download. Users get src/, config/, composer.json and the
+# docs; they don't get our tests, tooling or caches.
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/.phpstan.cache     export-ignore
+/.phpunit.cache     export-ignore
+/composer.lock      export-ignore
+/phpstan.neon       export-ignore
+/phpunit.xml.dist   export-ignore
+/RELEASING.md       export-ignore
+/tests              export-ignore
+/vendor             export-ignore

@@ -11,7 +11,14 @@ use Lytecache\LyteCache;
 use Lytecache\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
-/** Hash operations, run once on the JSON1 path and once with the fallback forced. */
+/**
+ * Hash operations, run once on the native JSON1 path and once with the
+ * read-modify-write fallback forced, with identical assertions: only the
+ * reported mode differs. Native mode needs SQLite 3.45+; on older SQLite the
+ * json1 dataset is skipped with the version named, unless
+ * LYTECACHE_REQUIRE_JSON1=1 (set by the CI job on a recent SQLite), which turns
+ * that skip into a failure so native coverage can never silently disappear.
+ */
 final class HashTest extends TestCase
 {
     private const WEIRD = ['a.b', 'a[0]', 'a]b', 'q"uote', 'back\\slash', '\\"', 'sp ace', 'ünï 字', '', '$', '*', '1', '2'];
@@ -29,6 +36,14 @@ final class HashTest extends TestCase
         putenv($mode === 'fallback' ? 'LYTECACHE_FORCE_JSON_FALLBACK=1' : 'LYTECACHE_FORCE_JSON_FALLBACK');
         $this->path ??= $this->tempDbPath();
         $c = new LyteCache(...['path' => $this->path, 'sweepInterval' => null, 'logger' => static fn (string $m) => null, ...$args]);
+        if ($mode === 'json1' && $c->hashMode() !== 'json1') {
+            $version = (string) (new \PDO('sqlite::memory:'))->query('SELECT sqlite_version()')->fetchColumn();
+            $why = "SQLite {$version} has no native JSON1 hash support (needs 3.45+); the fallback dataset covers this platform";
+            if ((string) getenv('LYTECACHE_REQUIRE_JSON1') !== '') {
+                self::fail("LYTECACHE_REQUIRE_JSON1 is set, but {$why}");
+            }
+            self::markTestSkipped($why);
+        }
         self::assertSame($mode, $c->hashMode());
         self::assertSame($mode, $c->stats()->hashMode);
 
@@ -298,5 +313,64 @@ final class HashTest extends TestCase
         $all = $c->hgetAll('shared');
         ksort($all); // field order follows the order the processes' writes landed in
         self::assertSame(['f0' => 59, 'f1' => 59, 'f2' => 59, 'n' => 180, 'other' => 'untouched'], $all);
+    }
+
+    /**
+     * The two modes must be indistinguishable apart from hashMode(): the same
+     * operations give the same return values, byte-identical documents where
+     * lytecache created them, and identical decoded content for a document
+     * from another encoder (SPEC "Encoding"). Covers awkward and
+     * quote-containing field names (which take the fallback per call on SQLite
+     * 3.45-3.47), floats and deletes.
+     */
+    public function test_both_modes_return_the_same_and_store_identical_bytes(): void
+    {
+        $script = static function (LyteCache $c, string $path): array {
+            $raw = new \PDO('sqlite:'.$path);
+            $raw->exec("INSERT INTO cache (key, namespace, value, value_type, created_at, last_accessed, access_count, size_bytes)
+                VALUES ('foreign', 'default', CAST('{ \"\\u00e9\" : 1 ,\"n\":2.50 }' AS BLOB), 4, 0, 0, 0, 26)");
+            // SPEC "Encoding": documents a hash operation created are byte-identical
+            // across modes; a document from another encoder is guaranteed identical
+            // decoded content (native keeps an existing key's \u00e9 spelling).
+            $snap = static function () use ($raw): array {
+                $rows = $raw->query("SELECT key, CAST(value AS TEXT) AS v FROM cache WHERE key NOT LIKE 'lock:%' ORDER BY key")->fetchAll(\PDO::FETCH_KEY_PAIR);
+                $foreign = json_decode((string) $rows['foreign'], true, flags: JSON_THROW_ON_ERROR);
+                unset($rows['foreign']);
+
+                return ['bytes' => $rows, 'foreign (decoded)' => $foreign];
+            };
+            $log = [];
+            foreach (self::WEIRD as $f) {
+                $log[] = $c->hset('h', $f, ['v' => $f]);
+            }
+            $log[] = $c->hsetnx('h', 'q"uote', 'ignored');
+            $log[] = $c->hsetnx('h', 'fresh', 1);
+            $c->hsetMany('h', ['a.b' => 2, 'new"one' => [1, 2], 'x' => null]);
+            $log[] = $c->hincrBy('h', 'count', 5);
+            $log[] = $c->hincrBy('h', 'q"count', -3);
+            $log[] = $c->hincrByFloat('h', 'ratio', 0.1);
+            $log[] = $c->hincrByFloat('h', 'ratio', 0.2);
+            $log[] = $c->hdel('h', 'a]b', 'missing', 'q"uote');
+            $log[] = $c->hmget('h', ['a.b', 'nope', '\\"', 'ünï 字']);
+            $log[] = $c->hgetAll('h');
+            $log[] = $c->hkeys('h');
+            $log[] = $c->hlen('h');
+            $log[] = $c->hset('foreign', 'é', 'replaced');
+            $log[] = $c->hincrByFloat('foreign', 'n', 1);
+            $log[] = $c->hgetAll('foreign');
+            $log[] = $snap();
+
+            return $log;
+        };
+
+        $results = [];
+        foreach (['fallback', 'json1'] as $mode) {
+            unset($this->path);
+            $c = $this->open($mode);
+            $results[$mode] = $script($c, $this->path);
+            $c->close();
+        }
+
+        self::assertSame($results['fallback'], $results['json1']);
     }
 }

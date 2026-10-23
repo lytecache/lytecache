@@ -2,6 +2,45 @@
 
 Redis-like caching for PHP with zero infrastructure -- no server, no extension beyond `pdo_sqlite`, just a file. `lytecache` gives you a familiar Redis-shaped API -- `set`/`get`, TTLs, atomic counters, eviction, distributed locks -- backed by a local SQLite file instead of a daemon. It works standalone in any PHP 8.2+ project, and as a native Laravel cache driver: point `CACHE_STORE` at `lytecache` and the `Cache` facade, `Cache::remember()`, and `Cache::lock()` all just work.
 
+## Requirements
+
+lytecache has two independent requirements. Upgrading one never fixes the other.
+
+### PHP
+
+**PHP 8.2 or newer** (`"php": "^8.2"`), with the `pdo`, `pdo_sqlite`, `json` and `filter`
+extensions. Composer enforces all of this when you install. The official PHP Docker
+images include them; on Debian or Ubuntu packages, install `php-sqlite3` for
+`pdo_sqlite`.
+
+If Composer's check is bypassed, the library refuses to start instead of failing
+mid-request (see [Troubleshooting](#troubleshooting)).
+
+### SQLite
+
+`pdo_sqlite` links your system's SQLite library, which Composer can't see. It only
+affects hash operations (`hset`, `hget`, …), which detect what the SQLite supports when
+the cache opens:
+
+| System SQLite | Hash mode (`hashMode()`) | Examples |
+|---|---|---|
+| 3.48 or newer | `json1` (native single SQL statements) | Alpine 3.21+ (3.48.0), Homebrew PHP |
+| 3.45 – 3.47 | `json1`, except calls naming a field that contains `"`, which use the fallback | Debian 13 (3.46.1), Ubuntu 24.04 (3.45.1) |
+| older than 3.45 | `fallback` (read-modify-write) | Debian 12 (3.40.1), RHEL 9 / Rocky 9 (3.34.1), Alpine 3.19 (3.44.2) |
+
+Both modes give identical results, including under concurrency. The fallback is slower,
+and its cost grows with the size of the document, because it re-reads the whole JSON
+object in PHP. Measured on SQLite 3.46.1:
+
+| Document | `hset` native / fallback | `hget` native / fallback |
+|---|---|---|
+| 20 fields | 47 µs / 69 µs | 9 µs / 38 µs |
+| 500 fields | 141 µs / 4.4 ms | 24 µs / 4.1 ms |
+
+If you use large hashes on an older distribution, the fallback is worth knowing about.
+Every other operation (`set`, `get`, counters, locks, events) is unaffected by the SQLite
+version.
+
 ## Install
 
 ```bash
@@ -109,11 +148,10 @@ $cache->hget('user:101', 'status');           // 'active'
 - **Errors:** a non-object value throws `SerializationException` and is left untouched;
   `hincrBy()` on a non-integer field throws `NotNumericException`; overflowing an int
   throws `OverflowException`, with nothing written.
-- **System SQLite matters here.** `pdo_sqlite` uses the system SQLite. Hashes need
-  SQLite ≥ 3.38 for JSON1, and in practice ≥ 3.49 for escaped quotes in JSON paths. On an
-  older system SQLite, lytecache logs one warning and uses a correct but slower
-  read-modify-write under `BEGIN IMMEDIATE`. `$cache->hashMode()` and
-  `stats()->hashMode` tell you which mode is in use. JSONB is never used.
+- **System SQLite matters here.** `pdo_sqlite` uses your system's SQLite, so how hashes
+  run depends on the distribution, not on PHP. See [SQLite](#sqlite) under Requirements.
+  `$cache->hashMode()` and `stats()->hashMode` tell you which mode is in use. JSONB is
+  never used.
 
 ### Events (local notification)
 
@@ -228,6 +266,39 @@ return [
 - **Not yet included** (see [SPEC.md](SPEC.md) for the full list of deliberate exclusions): networking, pub/sub, clustering, session/queue drivers. These are `v0.2`-or-later considerations, not oversights.
 
 See [SPEC.md](SPEC.md) for the on-disk schema, type codes, and full cross-language semantics.
+
+## Troubleshooting
+
+### Installed but crashes with a fatal error
+
+On a PHP older than 8.2 you'll now see this at startup, from `vendor/autoload.php`:
+
+```
+RuntimeException: lytecache requires PHP 8.2 or newer; this process is running PHP 8.1.34.
+Composer should have refused this install, so it was most likely installed with
+--ignore-platform-reqs or --ignore-platform-req=php, or the root composer.json sets
+config.platform.php.
+```
+
+(Older releases instead crashed later, mid-request, with a parse error inside
+`vendor/lytecache/lytecache/src`.) Composer refuses this install unless something
+bypassed its check. There are three ways that happens; check each:
+
+1. **`--ignore-platform-reqs` or `--ignore-platform-req=php`** in a Dockerfile, CI
+   workflow or deploy script. Search for it:
+   `grep -rn -- '--ignore-platform-req' Dockerfile* .github/ deploy/ 2>/dev/null`.
+   Remove it. If one build genuinely needs it, narrow it to the single extension in
+   question (`--ignore-platform-req=ext-something`) and leave the PHP check on.
+2. **`config.platform.php` in your app's `composer.json`.** It makes Composer resolve
+   for a PHP you aren't running: `composer config platform.php` prints it if set. Set it
+   to the PHP you deploy on, or remove it. (Composer's own startup check usually catches
+   this case first, with "Composer detected issues in your platform".)
+3. **A `composer.lock` resolved on a different PHP**, then installed with the check
+   bypassed. Run `composer check-platform-reqs` on the machine that runs the app: it
+   lists every requirement the installed packages have that this PHP doesn't meet.
+
+The fix is to run PHP 8.2 or newer, or to stay on a lytecache release that supports your
+PHP. Don't silence the error: below 8.2 the library cannot run.
 
 ## License
 

@@ -492,32 +492,56 @@ are not supported: `hset(k, "a.b", 1)` sets a top-level key named `a.b`.
   reads back as exactly `x`. That is the same shortest round-trip form as
   Python's `repr()`, and it works on every SQLite version.
 - **Encoding.** Rows written by hash operations stay UTF-8 JSON **text**
-  (`value_type` 4), compact, with non-ASCII characters stored as UTF-8, the
-  same as other code-4 values. Readers MUST accept any valid JSON
-  formatting (whitespace, `\uXXXX` escapes), since rows may come from other
-  encoders.
+  (`value_type` 4) and compact. A document a hash operation creates stores
+  non-ASCII characters as UTF-8, the same as other code-4 values, and is
+  byte-identical whichever mode or implementation wrote it. A document that
+  came from another encoder is guaranteed identical *decoded* content after
+  a hash write, not identical bytes: native mode keeps an existing key's
+  original spelling (`\u00e9` stays `\u00e9`), while the fallback re-encodes
+  keys as UTF-8. Readers MUST accept any valid JSON formatting (whitespace,
+  `\uXXXX` escapes), since rows may come from other encoders.
 
 ### JSON1 requirement and fallback
 
 Hash writes use SQLite's built-in JSON functions (`json_set`, `json_remove`,
 `json_extract`, `json_type`, `json_valid`, `json_each`, `json_object`) and
-the `->` operator, all built in from SQLite 3.38. Bundled-SQLite drivers
+the `->` operator, all built in from SQLite 3.38, though native mode needs 3.45 (below). Bundled-SQLite drivers
 (Python's own build, `sqlite-jdbc`, `modernc.org/sqlite`, `better-sqlite3`)
 are recent enough. PHP's `pdo_sqlite` links the system SQLite, which may be
 older on some distributions.
 
-Implementations detect support once, when the first connection opens, by
-running `SELECT json_valid('{}'), '{"a\"b":[1]}' -> '$."a\"b"'` (expecting
-`1, '[1]'`) and catching any error. This checks the JSON functions, the `->`
-operator and escaped path labels together. The last check matters: SQLite
-3.44 and 3.45 resolve a `\"` inside a quoted path label incorrectly.
-`json_extract` returns NULL, and 3.44's `json_set` silently writes
-nothing. Releases from 3.49 on handle it correctly (verified on 3.49, 3.53). When the check fails, an
-implementation falls back to read-modify-write inside `BEGIN IMMEDIATE`.
-That is correct but slower and holds the write lock longer. It logs one
-warning naming the SQLite version and reports the mode as
-`stats()["hash_mode"]` (`"json1"` or `"fallback"`). The environment variable
-`LYTECACHE_FORCE_JSON_FALLBACK=1` forces the fallback, for testing.
+Implementations detect support once, when the first connection opens, with
+two probes, catching any error as "unsupported":
+
+1. **Native mode:** `SELECT json_valid('{}'), '{"\u00e9":[1]}' -> '$."é"',
+   '{"a\\b":[2]}' -> '$."a\\b"'`, expecting `1, '[1]', '[2]'`. This checks the
+   JSON functions, the `->` operator, and that path labels match the
+   *decoded* key. SQLite before 3.45 compares labels against the raw encoded
+   text instead, so a document from another encoder that spells `é` as
+   `\u00e9` is missed on read and gets a duplicate key on write. Those
+   versions must use the fallback.
+2. **Escaped double quotes in labels:** `SELECT '{"a\"b":[1]}' -> '$."a\"b"'`,
+   expecting `'[1]'`. SQLite 3.45–3.47 handle every other field name natively
+   but not one containing `"` (`json_extract` returns NULL, `json_set`
+   fails). Verified missing on 3.44.2, 3.45.3 and 3.46.1; present on 3.48.0,
+   3.49.2 and 3.53.
+
+| SQLite | Hash mode |
+|---|---|
+| 3.48 and newer | native for every field name |
+| 3.45 – 3.47 | native, except that a call naming a field that contains `"` uses the fallback for that call |
+| older than 3.45 | fallback |
+
+The fallback is read-modify-write inside `BEGIN IMMEDIATE`. It is correct
+under concurrency, with identical results, but it holds the write lock while
+it re-parses the whole document, so its cost grows with document size
+(measured in PHP on SQLite 3.46.1: about 1.5x native for writes on a
+20-field document, and about 30x on a 500-field one). When native mode is
+unavailable an implementation logs one warning naming the SQLite version
+and reports the mode as `stats()["hash_mode"]` (`"json1"` or `"fallback"`).
+`"json1"` is also reported on 3.45–3.47, where only `"`-containing field
+names fall back. The environment variable `LYTECACHE_FORCE_JSON_FALLBACK=1`
+forces the fallback, for testing.
 
 **JSONB is not used.** SQLite 3.45+ can store JSON in a binary format that
 is faster to query, but other lytecache implementations cannot read it, so

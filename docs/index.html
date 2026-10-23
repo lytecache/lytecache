@@ -1844,6 +1844,25 @@ docker inspect myapp-lytecache-ui-1 --format '{{range .Mounts}}{{.Name}} -&gt; {
                <p>SQLite allows one writer at a time. A process that finds the file locked waits up to five seconds (<code>busy_timeout=5000</code>) for its turn. If it still can't write, it gets a "database is locked" error. It doesn't silently drop the write. So a lost write means either an error that something swallowed, or a bug.</p>
                <p>Look for a <code>try</code> or <code>catch</code> around cache writes that discards the error. While you investigate, turn on <code>strict</code> mode too: by default a failing <em>read</em> is logged and returned as a miss, which can look like a write that never happened. Read-modify-write code (<code>get</code>, change, <code>set</code>) loses updates whenever two writers overlap. Use <code>incr</code>, the hash operations or <code>lock()</code> instead.</p>
                <p>If you've ruled those out, please <a href="https://github.com/lytecache/lytecache/issues" target="_blank" rel="noopener">open an issue</a> and include the library and version (<code>pip show lytecache</code>, <code>npm ls lytecache</code>, the Maven/Composer version or the Go module version), the SQLite version, how many processes write concurrently, and whether the file sits on a network filesystem. NFS and Kubernetes <code>ReadWriteMany</code> volumes aren't supported, because SQLite's locking doesn't work reliably on them.</p>
+               <h3 id="installed-but-crashes">“PHP: installed fine, but crashes with a fatal error.”</h3>
+               <p>lytecache for PHP needs PHP 8.2 or newer, and Composer refuses to install it on anything older. If the install went through anyway, something bypassed that check, and the library now stops at startup with this message instead of crashing mid-request:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Error</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">RuntimeException: lytecache requires PHP 8.2 or newer; this process is running PHP 8.1.34.
+Composer should have refused this install, so it was most likely installed with
+--ignore-platform-reqs or --ignore-platform-req=php, or the root composer.json sets
+config.platform.php.</code></pre>
+               </div>
+               <p>Check the three ways a bypass happens:</p>
+               <ol>
+                  <li><strong>An install flag.</strong> Look for <code>--ignore-platform-reqs</code> or <code>--ignore-platform-req=php</code> in your Dockerfile, CI workflow or deploy script, and remove it. If one build genuinely needs it, narrow it to the one extension involved (<code>--ignore-platform-req=ext-something</code>).</li>
+                  <li><strong><code>config.platform.php</code> in your app's <code>composer.json</code>.</strong> It makes Composer resolve for a PHP you aren't running. <code>composer config platform.php</code> prints it if it's set. Composer's own startup check usually reports this one first, as &ldquo;Composer detected issues in your platform&rdquo;.</li>
+                  <li><strong>A <code>composer.lock</code> resolved on a different PHP.</strong> Run <code>composer check-platform-reqs</code> on the machine that runs the app. It lists every requirement this PHP doesn't meet.</li>
+               </ol>
+               <p>The fix is a supported PHP. Don't silence the error: below 8.2 the library can't run.</p>
                <h3 id="ts-ttl-units">“My keys expire sooner or later than I expected.”</h3>
                <p>In Python, Node.js and PHP, <code>ttl</code> is in <strong>seconds</strong>. Passing milliseconds out of habit, like <code>ttl=5000</code>, gives you 83 minutes instead of 5 seconds. Going the other way, <code>ttl=0.3</code> is 300 milliseconds. Java and Go take a typed duration, so they can't get this wrong.</p>
                <p>Check what you actually stored straight after the write:</p>
@@ -2589,7 +2608,7 @@ $cache-&gt;hgetAll("user:101");                    // ["status" =&gt; "paused", 
 $cache-&gt;hdel("user:101", "plan");               // 0 -- it wasn't there</code></pre>
                      </div>
                   </div>
-                  <p>A hash isn't a separate type. Anything stored with <code>set(key, &#123;...&#125;)</code> works with <code>hget</code>, and <code>get</code> returns the whole document. A field write on a missing key creates it with <strong>no expiry</strong>, unless you pass a TTL, and that TTL only applies on creation. A field write never changes an existing TTL and never revives an expired key. Field names are literal top-level keys: <code>"a.b"</code> is one field, not a path. A hash operation on a value that isn't a JSON object raises the library's serialization error and leaves the value alone. <code>stats()</code> reports which mode hashes run in (<code>hash_mode</code> / <code>hashMode</code> / <code>HashMode</code>). Normally it's <code>json1</code>. On an old system SQLite, which you'll mostly meet with PHP, it's <code>fallback</code>: hashes stay correct but hold the write lock longer.</p>
+                  <p>A hash isn't a separate type. Anything stored with <code>set(key, &#123;...&#125;)</code> works with <code>hget</code>, and <code>get</code> returns the whole document. A field write on a missing key creates it with <strong>no expiry</strong>, unless you pass a TTL, and that TTL only applies on creation. A field write never changes an existing TTL and never revives an expired key. Field names are literal top-level keys: <code>"a.b"</code> is one field, not a path. A hash operation on a value that isn't a JSON object raises the library's serialization error and leaves the value alone. <code>stats()</code> reports which mode hashes run in (<code>hash_mode</code> / <code>hashMode</code> / <code>HashMode</code>). Native mode needs SQLite 3.45 or newer, and 3.48 for a field name containing <code>"</code>; on 3.45&ndash;3.47 only calls naming such a field use the fallback. Older SQLite runs every hash call through the fallback. You'll mostly meet that with PHP, whose <code>pdo_sqlite</code> uses the system SQLite: Debian 12 ships 3.40.1, Debian 13 ships 3.46.1. Results are identical either way, but the fallback re-reads the whole document, so its cost grows with the hash's size.</p>
                </div>
                <div class="api-group" id="api-events">
                   <h3>Local events (notify / watch)</h3>

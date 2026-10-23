@@ -72,6 +72,16 @@ final class JsonObject
         return '{'.implode(',', $parts).'}';
     }
 
+    /**
+     * JSON's whitespace is exactly these four characters (RFC 8259, section 2).
+     * Deliberately not ctype_space(), which also accepts \v and \f and needs
+     * the ctype extension.
+     */
+    private static function isJsonWhitespace(string $ch): bool
+    {
+        return $ch === ' ' || $ch === "\t" || $ch === "\n" || $ch === "\r";
+    }
+
     /** Removes insignificant whitespace, leaving string contents untouched. */
     private static function compact(string $text): string
     {
@@ -90,7 +100,7 @@ final class JsonObject
             } elseif ($ch === '"') {
                 $inString = true;
                 $out .= $ch;
-            } elseif (! ctype_space($ch)) {
+            } elseif (! self::isJsonWhitespace($ch)) {
                 $out .= $ch;
             }
         }
@@ -125,7 +135,7 @@ final class JsonObject
         $i = 1;
         $len = strlen($t);
         $skipWs = static function () use (&$i, $t, $len): void {
-            while ($i < $len && ctype_space($t[$i])) {
+            while ($i < $len && self::isJsonWhitespace($t[$i])) {
                 $i++;
             }
         };

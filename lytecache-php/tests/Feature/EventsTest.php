@@ -335,6 +335,24 @@ final class EventsTest extends TestCase
         self::assertSame(['a', 'b', 'a', 'a', 'n', 'h', 'h'], $keys);
     }
 
+    public function test_prefix_patterns_match_by_character_not_byte(): void
+    {
+        // SQLite's substr() counts characters on TEXT, so the prefix length must
+        // be in characters too. A byte length ("naïve:" is 7 bytes, 6
+        // characters) would compare against the wrong slice of the channel.
+        $c = $this->open();
+        foreach (['naïve:é', 'naïve:x', 'naïvex', 'naive:x', 'naï'] as $ch) {
+            $c->notify($ch, $ch);
+        }
+        $sub = $c->watch(['naïve:*', 'é*'], fromSeq: 0);
+        $got = [];
+        while (($e = $sub->tryNext()) !== null) {
+            $got[] = $e->channel;
+        }
+        $sub->close();
+        self::assertSame(['naïve:é', 'naïve:x'], $got);
+    }
+
     public function test_rollback_throwing_listener_reentrancy_and_depth_guard(): void
     {
         $logs = [];

@@ -11,13 +11,15 @@ defaults:
     working-directory: lytecache-php
 
 jobs:
+  # Every supported PHP version (the ^8.2 floor up to the current stable
+  # release) on every OS: pdo_sqlite behaviour and file locking differ.
   test:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        php-version: ["8.2", "8.3", "8.4"]
+        php-version: ["8.2", "8.3", "8.4", "8.5"]
 
     steps:
       - uses: actions/checkout@v4
@@ -26,26 +28,26 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          # pdo/pdo_sqlite are the core's only real runtime requirement; fileinfo
-          # is not used by lytecache itself but is required transitively by
-          # laravel/framework (via league/flysystem-local) in require-dev, and
-          # isn't enabled by default on the Windows runner's PHP build -- without
-          # it, Composer can't resolve a laravel/framework 12.x + PHP 8.2
-          # dependency graph at all and falls back toward 11.x releases that are
-          # blocked by Composer's security-advisory audit.
-          extensions: pdo, pdo_sqlite, fileinfo
+          # pdo, pdo_sqlite, json and filter are what lytecache itself needs
+          # (declared in composer.json). fileinfo isn't used by lytecache but is
+          # required transitively by laravel/framework in require-dev, and isn't
+          # enabled by default on the Windows runner's PHP build.
+          extensions: pdo, pdo_sqlite, json, filter, fileinfo
           coverage: none
 
       - name: Validate composer.json
         run: composer validate --strict
 
       - name: Install dependencies
-        # No composer.lock is committed (standard practice for libraries -- see
-        # RELEASING.md) so each PHP version in the matrix resolves its own
-        # compatible dependency graph via `composer update`, rather than all
-        # three versions being forced through one lock file resolved against
-        # a single PHP version.
+        # No composer.lock is committed (a library; see RELEASING.md), so each
+        # PHP version resolves its own compatible dependency graph.
         run: composer update --prefer-dist --no-progress
+
+      - name: Report the SQLite this job tests against
+        shell: bash
+        run: |
+          # shellcheck disable=SC2016 # single quotes on purpose: $ is PHP's, not the shell's
+          php -r 'require "vendor/autoload.php"; $c = new Lytecache\LyteCache(path: sys_get_temp_dir()."/mode.db", logger: fn ($m) => null); echo "SQLite ", (new PDO("sqlite::memory:"))->query("select sqlite_version()")->fetchColumn(), ", hash mode ", $c->hashMode(), PHP_EOL;'
 
       - name: PHPStan
         if: matrix.php-version == '8.3' && matrix.os == 'ubuntu-latest'
@@ -57,3 +59,187 @@ jobs:
 
       - name: PHPUnit
         run: composer test
+
+  # The SQLite axis. pdo_sqlite links the system SQLite, so the hash mode
+  # depends on the distribution, not on PHP. Each job pins an image and asserts
+  # the mode it must produce, so an image update can't silently move coverage.
+  sqlite:
+    name: sqlite ${{ matrix.sqlite }} (${{ matrix.expect }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: php:8.2-cli-alpine3.19   # SQLite 3.44.2
+            sqlite: "3.44"
+            expect: fallback
+            require_json1: ""
+          - image: php:8.3-cli-trixie       # SQLite 3.46.1, Debian 13
+            sqlite: "3.46"
+            expect: json1
+            require_json1: "1"
+          - image: php:8.4-cli-alpine       # current SQLite, escaped quotes native
+            sqlite: "latest"
+            expect: json1
+            require_json1: "1"
+    env:
+      # Where native mode is expected, a skipped native dataset is a failure.
+      LYTECACHE_REQUIRE_JSON1: ${{ matrix.require_json1 }}
+    steps:
+      - name: Install tools
+        working-directory: /
+        run: |
+          if command -v apk >/dev/null; then apk add --no-cache git unzip; else apt-get update -qq && apt-get install -y -qq git unzip; fi
+          php -r 'copy("https://getcomposer.org/installer", "/tmp/installer.php");'
+          php /tmp/installer.php --quiet --install-dir=/usr/local/bin --filename=composer
+
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-progress
+
+      - name: Assert the hash mode this SQLite must produce
+        run: |
+          # shellcheck disable=SC2016 # single quotes on purpose: $ is PHP's, not the shell's
+          mode=$(php -r 'require "vendor/autoload.php"; echo (new Lytecache\LyteCache(path: "/tmp/mode.db", logger: fn ($m) => null))->hashMode();')
+          echo "SQLite $(php -r 'echo (new PDO("sqlite::memory:"))->query("select sqlite_version()")->fetchColumn();'): hash mode $mode"
+          test "$mode" = "${{ matrix.expect }}"
+
+      - name: PHPUnit
+        run: php vendor/bin/phpunit
+
+  # Regression guard for the declared floor: any syntax or API newer than
+  # PHP 8.2 in src/ fails the build. Also proves the bootstrap guard still
+  # parses on the PHP versions it exists to reject.
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          coverage: none
+
+      - name: PHPCompatibility at the declared floor (8.2)
+        run: |
+          mkdir -p "$RUNNER_TEMP/phpcs" && cd "$RUNNER_TEMP/phpcs"
+          composer init --no-interaction --name=ci/phpcs --quiet
+          composer config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer require --no-interaction --quiet "phpcompatibility/php-compatibility:^10.0@alpha" squizlabs/php_codesniffer
+          cd "$GITHUB_WORKSPACE/lytecache-php"
+          "$RUNNER_TEMP/phpcs/vendor/bin/phpcs" -p src --standard=PHPCompatibility --runtime-set testVersion 8.2-
+
+      - name: Bootstrap guard parses on PHP 7.0, 7.4, 8.0 and 8.1
+        run: |
+          for v in 7.0 7.4 8.0 8.1; do
+            docker run --rm -v "$PWD/src:/src" "php:$v-cli" php -l /src/platform_guard.php
+          done
+
+  # Builds the archive Packagist will serve (git archive honours the
+  # .gitattributes export-ignore list) and installs it into an empty project on
+  # the floor version: the artifact users get must work where it claims to.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo, pdo_sqlite
+          coverage: none
+
+      - name: Build the dist archive
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/dist"
+          git archive HEAD lytecache-php | tar -x -C "$RUNNER_TEMP/dist"
+          test ! -e "$RUNNER_TEMP/dist/lytecache-php/vendor"
+          test ! -e "$RUNNER_TEMP/dist/lytecache-php/tests"
+
+      - name: Install into a scratch project and run the smoke test
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir app && cd app
+          cat > composer.json <<EOF
+          { "repositories": [{ "type": "path", "url": "$RUNNER_TEMP/dist/lytecache-php", "options": { "symlink": false, "versions": { "lytecache/lytecache": "0.0.1" } } }],
+            "minimum-stability": "dev", "prefer-stable": true }
+          EOF
+          composer require --no-interaction lytecache/lytecache:0.0.1
+          cat > smoke.php <<'EOF'
+          <?php
+          require __DIR__.'/vendor/autoload.php';
+          $cache = new Lytecache\LyteCache(path: sys_get_temp_dir().'/smoke.db');
+          $cache->set('greeting', 'hello');
+          if ($cache->get('greeting') !== 'hello') { fwrite(STDERR, "smoke failed\n"); exit(1); }
+          echo "smoke OK on PHP ", PHP_VERSION, PHP_EOL;
+          EOF
+          php smoke.php
+
+  # The bug this guards against: an install below the floor must be refused by
+  # Composer, and a forced install must fail with the guard's message at
+  # bootstrap, never a parse error from inside the library.
+  below-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+          extensions: pdo, pdo_sqlite
+          coverage: none
+
+      - name: Build the dist archive
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/dist"
+          git archive HEAD lytecache-php | tar -x -C "$RUNNER_TEMP/dist"
+
+      - name: Composer refuses, and every bypass hits the guard
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set -u
+          app() {
+            mkdir "$1" && cd "$1"
+            cat > composer.json <<EOF
+          { "repositories": [{ "type": "path", "url": "$RUNNER_TEMP/dist/lytecache-php", "options": { "symlink": false, "versions": { "lytecache/lytecache": "0.0.1" } } }],
+            "minimum-stability": "dev", "prefer-stable": true $2 }
+          EOF
+            printf '%s\n' '<?php' "require __DIR__.'/vendor/autoload.php';" "new Lytecache\\LyteCache(sys_get_temp_dir().'/x.db');" > app.php
+          }
+          expect_guard() {
+            if php app.php > out.txt 2>&1; then echo "::error::$1: app ran on PHP 8.1"; exit 1; fi
+            cat out.txt
+            grep -q 'Parse error' out.txt && { echo "::error::$1: parse error instead of a clear refusal"; exit 1; }
+            grep -qE "$2" out.txt || { echo "::error::$1: expected message not found"; exit 1; }
+            cd ..
+          }
+
+          echo "--- plain install must be refused"
+          app plain ""
+          if composer require --no-interaction lytecache/lytecache:0.0.1 > req.txt 2>&1; then cat req.txt; echo "::error::Composer installed on PHP 8.1"; exit 1; fi
+          grep 'requires php' req.txt; cd ..
+
+          echo "--- --ignore-platform-reqs"
+          app ignore-all ""
+          composer require --no-interaction --quiet --ignore-platform-reqs lytecache/lytecache:0.0.1
+          expect_guard ignore-all 'lytecache requires PHP 8.2 or newer'
+
+          echo "--- --ignore-platform-req=php"
+          app ignore-php ""
+          composer require --no-interaction --quiet --ignore-platform-req=php lytecache/lytecache:0.0.1
+          expect_guard ignore-php 'lytecache requires PHP 8.2 or newer'
+
+          echo "--- root config.platform.php (Composer's own check fires first)"
+          app platform ', "config": {"platform": {"php": "8.2.0"}}'
+          composer require --no-interaction --quiet lytecache/lytecache:0.0.1
+          expect_guard platform 'Composer detected issues in your platform|lytecache requires PHP 8.2 or newer'
+
+          echo "--- config.platform.php with platform-check off (the guard is the last line)"
+          app platform-nocheck ', "config": {"platform": {"php": "8.2.0"}, "platform-check": false}'
+          composer require --no-interaction --quiet lytecache/lytecache:0.0.1
+          expect_guard platform-nocheck 'lytecache requires PHP 8.2 or newer'

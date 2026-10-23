@@ -94,6 +94,13 @@ final class LyteCache
     /** JSON1 support for hash operations, detected once at open. */
     private readonly bool $json1;
 
+    /**
+     * Whether this SQLite also resolves path labels with an escaped double quote
+     * ($."a\"b"). SQLite 3.45-3.47 handle every other field name natively but not
+     * that one, so hash calls naming such a field take the fallback there.
+     */
+    private readonly bool $json1QuotedLabels;
+
     // Events and change listeners are opt-in: none of this costs anything
     // (no table, no work) until notify/watch/onChange is first used.
     private bool $eventsReady = false;
@@ -167,7 +174,7 @@ final class LyteCache
 
         $this->pdo = $this->openWithRetry($this->path);
         $this->lastMaintenanceAt = microtime(true);
-        $this->json1 = $this->detectJson1();
+        [$this->json1, $this->json1QuotedLabels] = $this->detectJson1();
     }
 
     /**
@@ -1098,28 +1105,72 @@ final class LyteCache
             SQL;
     }
 
-    private function detectJson1(): bool
+    /**
+     * Probes what this SQLite's JSON1 can do. Native mode needs the JSON
+     * functions, the -> operator, and path labels matched against the *decoded*
+     * key: a document written as {"\u00e9":1} must be found by $."é", and a
+     * backslash must round-trip. SQLite before 3.45 matches the raw encoded text
+     * instead, so a document from another writer would get a duplicate key; it
+     * stays on the fallback. Escaped double quotes in labels arrive later
+     * (3.48 here; 3.46.1 lacks them), and are probed separately.
+     *
+     * @return array{bool, bool} [native, quoted labels]
+     */
+    private function detectJson1(): array
     {
         if ((string) getenv(self::FORCE_JSON_FALLBACK_ENV) !== '') {
             ($this->logger)('lytecache: '.self::FORCE_JSON_FALLBACK_ENV.' is set; hash operations use the read-modify-write fallback');
 
-            return false;
+            return [false, false];
         }
+        $native = false;
         try {
             $row = self::query($this->pdo, <<<'SQL'
-                SELECT json_valid('{}') AS ok, '{"a\"b":[1]}' -> '$."a\"b"' AS arr
+                SELECT json_valid('{}') AS ok,
+                       '{"\u00e9":[1]}' -> '$."é"' AS decoded,
+                       '{"a\\b":[2]}' -> '$."a\\b"' AS backslash
                 SQL)->fetch(\PDO::FETCH_ASSOC);
-            if (is_array($row) && (int) $row['ok'] === 1 && $row['arr'] === '[1]') {
-                return true;
-            }
+            $native = is_array($row) && (int) $row['ok'] === 1 && $row['decoded'] === '[1]' && $row['backslash'] === '[2]';
         } catch (\PDOException) {
-            // fall through: no JSON1, or no -> operator
+            // no JSON1, or no -> operator
+        }
+        if ($native) {
+            try {
+                $quoted = self::query($this->pdo, <<<'SQL'
+                    SELECT '{"a\"b":[1]}' -> '$."a\"b"'
+                    SQL)->fetchColumn() === '[1]';
+            } catch (\PDOException) {
+                $quoted = false;
+            }
+
+            return [true, $quoted];
         }
         $version = (string) self::query($this->pdo, 'SELECT sqlite_version()')->fetchColumn();
-        ($this->logger)("lytecache: SQLite {$version} lacks the JSON1 support hash operations need (JSON functions, the -> "
-            .'operator and escaped path labels); falling back to a slower read-modify-write under BEGIN IMMEDIATE');
+        ($this->logger)("lytecache: SQLite {$version} lacks the JSON1 support hash operations need (SQLite 3.45 or newer: JSON "
+            .'functions, the -> operator and decoded path labels); hash operations use the read-modify-write fallback under BEGIN IMMEDIATE');
 
-        return false;
+        return [false, false];
+    }
+
+    /**
+     * Whether a hash call naming these fields can run as single SQL statements.
+     * False means the read-modify-write fallback, which has identical results.
+     */
+    private function nativeFor(string ...$fields): bool
+    {
+        if (! $this->json1) {
+            return false;
+        }
+        if ($this->json1QuotedLabels) {
+            return true;
+        }
+        foreach ($fields as $f) {
+            if (str_contains($f, '"')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** "json1" (single SQL statements) or "fallback" (read-modify-write under BEGIN IMMEDIATE). */
@@ -1328,7 +1379,7 @@ final class LyteCache
     {
         $this->assertOpen();
         $encoded = self::encodeHashValue($value);
-        if (! $this->json1) {
+        if (! $this->nativeFor($field)) {
             return (bool) $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($field, $encoded): array {
                 $created = ! $doc->has($field);
                 $doc->set($field, $encoded);
@@ -1366,7 +1417,7 @@ final class LyteCache
     {
         $this->assertOpen();
         $encoded = self::encodeHashValue($value);
-        if (! $this->json1) {
+        if (! $this->nativeFor($field)) {
             return (bool) $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($field, $encoded): array {
                 if ($doc->has($field)) {
                     return [false, false];
@@ -1411,7 +1462,7 @@ final class LyteCache
         if ($entries === []) {
             return;
         }
-        if (! $this->json1) {
+        if (! $this->nativeFor(...array_column($entries, 0))) {
             $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($entries): array {
                 foreach ($entries as [$f, $v]) {
                     $doc->set($f, $v);
@@ -1464,7 +1515,7 @@ final class LyteCache
     {
         $this->assertOpen();
         $now = self::nowMillis();
-        if (! $this->json1) {
+        if (! $this->nativeFor(...$fields)) {
             $doc = $this->loadHash($key, $now);
             $this->recordHashRead($key, $now, $doc !== null);
 
@@ -1556,7 +1607,7 @@ final class LyteCache
         if ($unique === []) {
             return 0;
         }
-        if (! $this->json1) {
+        if (! $this->nativeFor(...$unique)) {
             return (int) $this->rmwHash($key, null, false, static function (JsonObject $doc) use ($unique): array {
                 $n = 0;
                 foreach ($unique as $f) {
@@ -1626,11 +1677,11 @@ final class LyteCache
     /**
      * @return list<array{0: string, 1: string}>
      */
-    private function hashEntries(string $key, bool $withValues): array
+    private function hashEntries(string $key, bool $withValues, bool $forceFallback = false): array
     {
         $this->assertOpen();
         $now = self::nowMillis();
-        if (! $this->json1) {
+        if (! $this->json1 || $forceFallback) {
             $doc = $this->loadHash($key, $now);
             if ($doc !== null) {
                 $this->bufferLru($key, $now);
@@ -1649,6 +1700,16 @@ final class LyteCache
         }
         if (! ((int) $rows[0]['vt'] === Schema::TYPE_JSON && $rows[0]['root'] === 'object')) {
             throw self::wrongType($key, (int) $rows[0]['vt'], $rows[0]['root']);
+        }
+        // Values are read through paths SQLite builds from the stored keys
+        // (j.fullkey). On SQLite 3.45-3.47 such a path can't address a key
+        // containing ", so a document holding one is re-read via the fallback.
+        if ($withValues && ! $this->json1QuotedLabels) {
+            foreach ($rows as $r) {
+                if ($r['k'] !== null && str_contains((string) $r['k'], '"')) {
+                    return $this->hashEntries($key, true, true);
+                }
+            }
         }
         $this->bufferLru($key, $now);
         $out = [];
@@ -1687,7 +1748,7 @@ final class LyteCache
     {
         $this->assertOpen();
         $kind = $integer ? 'an integer' : 'a number';
-        if (! $this->json1) {
+        if (! $this->nativeFor($field)) {
             return (string) $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($field, $amount, $integer, $kind, $key): array {
                 $raw = trim($doc->get($field) ?? '0');
                 if ($integer) {

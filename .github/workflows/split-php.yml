@@ -43,4 +43,46 @@ jobs:
           TAG_NAME="${GITHUB_REF#refs/tags/}"
           git remote add split "https://x-access-token:${SPLIT_REPO_TOKEN}@github.com/lytecache/lytecache-php.git"
           git push split split-branch:refs/heads/main --force
-          git push split split-branch:refs/tags/${TAG_NAME} --force
+          git push split "split-branch:refs/tags/${TAG_NAME}" --force
+
+  # Proves the artifact users actually download works: waits for Packagist to
+  # pick up the tag, installs exactly that version into an empty project on the
+  # floor PHP version, and runs a smoke test against it.
+  verify-published:
+    needs: split
+    runs-on: ubuntu-latest
+    steps:
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo, pdo_sqlite
+          coverage: none
+
+      - name: Wait for Packagist to list the new version
+        run: |
+          version="${GITHUB_REF#refs/tags/}"
+          for attempt in $(seq 1 40); do
+            if curl -fsS "https://repo.packagist.org/p2/lytecache/lytecache.json" | grep -q "\"version\":\"${version}\""; then
+              echo "Packagist lists ${version}"; exit 0
+            fi
+            echo "attempt ${attempt}: ${version} not on Packagist yet"; sleep 15
+          done
+          echo "::error::Packagist did not list ${version} within 10 minutes"; exit 1
+
+      - name: Install the published version and run the smoke test
+        working-directory: ${{ runner.temp }}
+        run: |
+          version="${GITHUB_REF#refs/tags/v}"
+          mkdir app && cd app
+          echo '{}' > composer.json
+          composer require --no-interaction "lytecache/lytecache:${version}"
+          test ! -e vendor/lytecache/lytecache/vendor || { echo "::error::the published package ships a vendor/ directory"; exit 1; }
+          cat > smoke.php <<'PHP'
+          <?php
+          require __DIR__.'/vendor/autoload.php';
+          $cache = new Lytecache\LyteCache(path: sys_get_temp_dir().'/smoke.db');
+          $cache->set('greeting', 'hello');
+          if ($cache->get('greeting') !== 'hello') { fwrite(STDERR, "smoke failed\n"); exit(1); }
+          echo 'published ', Composer\InstalledVersions::getPrettyVersion('lytecache/lytecache'), ' works on PHP ', PHP_VERSION, PHP_EOL;
+          PHP
+          php smoke.php

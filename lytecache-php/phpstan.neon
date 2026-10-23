@@ -1,4 +1,6 @@
 parameters:
+    # The declared floor (composer.json "php": "^8.2"), so analysis flags any newer feature.
+    phpVersion: 80200
     level: 8
     paths:
         - src

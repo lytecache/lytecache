@@ -18,6 +18,31 @@ All notable changes to this project are documented in this file.
 - `onChange($listener, $events)`: in-process change listeners, one `ChangeRecord` per call.
 - Constructor options `publishChanges`, `eventRetention`, `eventMaxCount`, `changeKeyCap`,
   `logger`.
+- **Bootstrap guard.** `src/platform_guard.php` is loaded by `vendor/autoload.php`. If
+  Composer's PHP check was bypassed (`--ignore-platform-reqs`,
+  `--ignore-platform-req=php`, or a root `config.platform.php`), lytecache now refuses to
+  start with a message naming the PHP version and the likely cause, instead of crashing
+  mid-request with a parse error. Measured cost: about 0.1 µs per request with OPcache.
+
+### Changed
+
+- **Supported PHP: 8.2 and newer** (`^8.2`, unchanged), tested on 8.2, 8.3, 8.4 and 8.5.
+  The required extensions are now all declared, so Composer checks them at install time:
+  `ext-pdo`, `ext-pdo_sqlite`, `ext-json`, `ext-filter`.
+- **SQLite and hash operations: native from SQLite 3.45** (was: only where escaped quotes
+  in JSON paths work, which in practice meant 3.48+). On SQLite 3.45-3.47 a hash call
+  naming a field that contains `"` uses the read-modify-write fallback for that call only;
+  below 3.45 every hash call uses the fallback, because older SQLite matches path labels
+  against the encoded key text and would duplicate keys in documents written by other
+  encoders. Results are identical in both modes. Debian 13 (3.46.1) and Ubuntu 24.04
+  (3.45.1) now run natively. The fallback's cost grows with document size; see the README.
+- No longer depends on the `mbstring` or `ctype` extensions. Watch-pattern prefixes are
+  now measured by SQLite's own `length()`, the same character semantics `substr()` uses
+  (behaviour unchanged). JSON whitespace is checked against JSON's exact four characters
+  instead of `ctype_space()` (no behaviour change: inputs are always valid JSON).
+- The package archive no longer includes `vendor/`, `tests/`, `composer.lock` or tool
+  caches. 0.2.0 and 0.2.1 shipped the full development dependency tree inside the
+  package by mistake.
 
 ## [0.2.1] - 2026-10-23
 
