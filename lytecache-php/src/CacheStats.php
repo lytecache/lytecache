@@ -21,10 +21,12 @@ final readonly class CacheStats
         public int $evictions,
         public int $expiredRemoved,
         public string $path,
+        /** "json1" or "fallback" -- see {@see LyteCache::hashMode()}. */
+        public string $hashMode = 'json1',
     ) {}
 
     /**
-     * @return array{hits: int, misses: int, hitRate: float, keyCount: int, sizeBytes: int, evictions: int, expiredRemoved: int, path: string}
+     * @return array{hits: int, misses: int, hitRate: float, keyCount: int, sizeBytes: int, evictions: int, expiredRemoved: int, path: string, hashMode: string}
      */
     public function toArray(): array
     {
@@ -37,6 +39,7 @@ final readonly class CacheStats
             'evictions' => $this->evictions,
             'expiredRemoved' => $this->expiredRemoved,
             'path' => $this->path,
+            'hashMode' => $this->hashMode,
         ];
     }
 }

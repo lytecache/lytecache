@@ -35,6 +35,14 @@ type DashboardRow struct {
 	SchemaVersion  int
 	ModTime        time.Time
 
+	// Events: zero/false when the file has never used notify/watch.
+	EventsEnabled  bool
+	RetainedEvents int64
+	PublishRate    float64 // events/min, see publishRateWindow
+	// LostCursors counts subscriber cursors outside the retained range:
+	// subscribers that permanently missed events (see CursorRow.Lost).
+	LostCursors int
+
 	Unhealthy    bool
 	UnhealthyWhy []string
 }
@@ -55,6 +63,14 @@ func (r DashboardRow) MaxKeysDisplay() string {
 		return "unlimited"
 	}
 	return strconv.FormatInt(*r.MaxKeys, 10)
+}
+
+// PublishRateDisplay renders PublishRate for the dashboard table.
+func (r DashboardRow) PublishRateDisplay() string {
+	if !r.EventsEnabled {
+		return "–"
+	}
+	return strconv.FormatFloat(r.PublishRate, 'f', 1, 64) + "/min"
 }
 
 // HitRatePercent renders HitRate as a percentage string for the dashboard
@@ -127,6 +143,20 @@ func buildDashboardRow(mgr *Manager, name string) DashboardRow {
 		row.ModTime = fi.ModTime()
 	}
 
+	if info, err := c.EventStats(); err == nil && info.Enabled {
+		now := time.Now()
+		row.EventsEnabled = true
+		row.RetainedEvents = info.Count
+		row.PublishRate, _ = publishRate(c, now)
+		if cursors, err := BuildCursorRows(c, info, now); err == nil {
+			for _, cr := range cursors {
+				if cr.Lost || cr.Ahead {
+					row.LostCursors++
+				}
+			}
+		}
+	}
+
 	row.Unhealthy, row.UnhealthyWhy = evaluateHealth(row)
 	return row
 }
@@ -152,6 +182,9 @@ func evaluateHealth(row DashboardRow) (bool, []string) {
 	}
 	if row.ExpiredPresent > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d expired key(s) not yet swept", row.ExpiredPresent))
+	}
+	if row.LostCursors > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d subscriber cursor(s) lost events (outside retention)", row.LostCursors))
 	}
 	return len(reasons) > 0, reasons
 }

@@ -21,7 +21,7 @@ java {
 
 dependencies {
     // Runtime dependencies (exactly as spec'd)
-    api("org.xerial:sqlite-jdbc:3.44.0.0")
+    api("org.xerial:sqlite-jdbc:3.53.4.0")
     api("com.fasterxml.jackson.core:jackson-databind:2.16.1")
     api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.16.1")
 

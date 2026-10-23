@@ -45,6 +45,80 @@ namespace mismatch (looking at `default` when your app writes to `sessions`)
 is the single most confusing failure mode people hit with this tool, so the
 UI tries hard to make it impossible to miss.
 
+## The Events tab
+
+Each database has an **Events** link in the sidebar: the operational window onto
+lytecache's local notification feature (`notify` / `watch`) and its subscribers. A
+database whose file has never used notification shows the link greyed out ("never
+used"), and opening it says so instead of erroring. Viewing the tab never creates the
+`events` table.
+
+**Live tail.** The newest 100 retained events, newest first: seq, age, time, channel,
+namespace, type, payload size, and a one-line payload preview. Previews stay hidden until
+you click **show payload previews**, the same reveal-behind-a-click treatment every value
+gets. Click a row (or select it with the arrow keys and press Enter) to open the event in
+the value viewer, with the same JSON tree and the same "written by another language's
+native serializer" message for codes 5 (python-pickle) and 6 (java-serialized).
+
+The tail refreshes the way the library's own subscribers poll: quickly while events are
+flowing, doubling the wait after each refresh that brought nothing new, and snapping back
+as soon as something arrives (0.5 s up to 5 s here, since each refresh renders part of a
+page). **pause** freezes it; a fast stream is unreadable otherwise.
+
+**Channel filter.** The box uses exactly the rule `watch` uses, so what you type behaves
+like what your code subscribes to: an exact channel name, or a trailing `*` as a prefix
+(`orders:*`), with `*` alone matching everything and `*` anywhere else taken literally.
+Separate several patterns with spaces (`invalidate orders:*`).
+
+**Retention panel.** Retained events, the seq range, the oldest retained event's age and
+seq, payload bytes, the publish rate (events per minute over the last 5 minutes), a
+per-channel breakdown, and the retention window. Retention is set by each publishing
+process (`event_retention` / `WithEventRetention`) and never written to the file, so the
+UI can't discover it. Declare the application's value in `ui.yaml` (see below) and the
+panel shows it; otherwise it shows the library default (1 h), marked as not declared.
+Compare the window with how long your subscribers can be down: a subscriber offline
+longer than the window loses events.
+
+**Subscriber lag**, the most useful part of the tab. Every named cursor saved with
+`save_cursor` / `SaveCursor` is listed with:
+
+- its seq;
+- **lag (events):** how far it is behind the newest seq;
+- **lag (time):** how long the oldest event after it has been waiting (0 when caught up).
+
+This answers "is my invalidation worker keeping up?". A cursor turns **red** ("lost
+events") when it is older than the oldest retained event. That subscriber has permanently
+missed events and will get a `GapError` when it resumes, which is the same check the
+library makes at runtime. "Ahead of file" means the cursor is past the last seq ever
+assigned (the file was probably recreated), which is also a gap.
+
+One caveat on reading lag: seq is a single order across every channel, and a cursor does
+not record which channels its subscriber watches. A subscriber of a quiet channel that
+only saves its cursor when it handles an event therefore looks further behind than it
+really is. If a quiet channel's last event ages out of retention, that subscriber shows
+"lost events", and it really will get a `GapError` on resume.
+
+The **fleet dashboard** shows each database's retained event count and publish rate, and
+flags a database as unhealthy when any of its cursors has lost events. So from the
+landing page you can see that one service has a subscriber that lost events, without
+drilling in.
+
+**Read-only, except for purges.** There is no compose box, no replay button, and no route
+that inserts into or edits the `events` table (see the capability model below). Under
+`--allow-delete` you can purge, and each purge goes in the audit log:
+
+| Purge | Effect on subscribers |
+|---|---|
+| Delete one event (from its viewer page) | Subscribers that hadn't reached it never see it; no gap |
+| Delete events older than an age | Removes the oldest events, as retention would; a cursor inside that range gets a `GapError` |
+| Clear a channel (type the name back to confirm) | Subscribers that hadn't reached those events never see them; no gap |
+
+**The UI never applies a retention of its own.** Every lytecache handle deletes events
+older than *its* retention when it sweeps. The UI can't know the application's setting,
+so its handles run no background sweeper and, even during a maintenance pass, never
+delete events. `lytecache maintain` from the CLI doesn't either. Retention is left to the
+publishing application.
+
 ## Which files it manages
 
 Decided entirely by the operator at startup -- there is no "add database"
@@ -115,6 +189,7 @@ databases:
     path: /data/sessions.db
     max_keys: 100000    # optional -- see "usage bars" below
     max_bytes: 536870912
+    event_retention: 24h  # optional -- the app's event retention, for the Events tab
 ```
 
 `max_keys`/`max_bytes` here are purely for the dashboard's usage bars and
@@ -123,7 +198,8 @@ UI enforces. The library has no way to discover an application's *own*
 configured capacity limits from the file alone (they're an in-memory
 setting on the application's own `Cache` instance, never written to disk),
 so if you want usage-against-cap bars, tell the UI what the application
-was configured with.
+was configured with. `event_retention` is the same kind of hint, for the
+Events tab's retention panel.
 
 ## The delete-only capability model
 
@@ -140,6 +216,9 @@ does have is exactly one of:
 | Flush a namespace | Requires typing the namespace name back, not just a checkbox |
 | Maintenance pass | Runs the expire sweep + eviction enforcement on demand |
 | Vacuum | Reclaims disk space from already-deleted rows |
+| Delete an event | Removes one event by seq |
+| Purge old events | Removes every event older than a chosen age |
+| Clear a channel | Removes a channel's events; requires typing the channel name back |
 
 These caches back a payments system. A UI that could inject or alter a
 cached record -- an OTP, an amount, an idempotency claim -- would be an
@@ -148,6 +227,11 @@ definition, anything worth caching is something the application can
 recompute or re-fetch. That asymmetry is the entire reason this tool is
 shaped the way it is, and it's enforced at the routing layer, not a
 permission check that a clever request could route around.
+
+The same applies to events. Publishing an event is writing data, so the UI
+cannot do it: no compose box, no replay, no route that inserts into the
+`events` table. The route-enumeration test covers the event routes too,
+and crafted publish-shaped requests get 404 or 405.
 
 ### `--allow-delete`
 
@@ -183,6 +267,25 @@ A masked key's value is never fetched from the database at all, let alone
 rendered -- stronger than the default reveal-behind-a-click treatment,
 which does still put the real value in the page.
 
+Event payloads can carry the same references and codes, so masking covers
+them too. A payload is withheld from every page and response, including
+the tail, its previews and the event viewer:
+
+- when its channel matches a `--mask-channels` glob (repeatable, same
+  syntax as `--mask-keys`);
+- when it references something matching a `--mask-keys` pattern: any JSON
+  field name or string value at any depth (a `{"key": "user:7:otp"}`
+  invalidation, a `__cache__` change record listing a masked key, an
+  `{"otp_code": ...}` field), or a plain string payload that matches.
+
+```console
+$ lytecache ui --mask-keys '*otp*' --mask-channels 'payments:*'
+```
+
+Masking deliberately over-matches: a payload that merely mentions a masked
+key is hidden in full. Binary, numeric and non-portable payloads can only
+be masked by channel.
+
 ## Audit log
 
 Every write action -- timestamp, username, remote IP, action, database,
@@ -210,8 +313,32 @@ lytecache_hits_total{database="orders"} 0
 lytecache_misses_total{database="orders"} 0
 lytecache_evictions_total{database="orders"} 0
 lytecache_expired_removed_total{database="orders"} 0
+lytecache_events_retained{channel="invalidate",database="orders"} 412
+lytecache_events_published_total{database="orders"} 9031
+lytecache_event_oldest_age_seconds{database="orders"} 3540.2
+lytecache_subscriber_lag_events{cursor="worker-b",database="orders",namespace="default"} 3
+lytecache_subscriber_lag_seconds{cursor="worker-b",database="orders",namespace="default"} 0.8
+lytecache_subscriber_gap{cursor="worker-b",database="orders",namespace="default"} 0
 lytecache_ui_scrape_duration_seconds 0.0011
 ```
+
+Event metrics appear only for files that have an `events` table:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `lytecache_events_retained` | gauge | database, channel | Events retained right now |
+| `lytecache_events_published_total` | **counter** | database | Events ever published, by any process |
+| `lytecache_event_oldest_age_seconds` | gauge | database | Age of the oldest retained event |
+| `lytecache_subscriber_lag_events` | gauge | database, namespace, cursor | How far a cursor is behind the newest seq |
+| `lytecache_subscriber_lag_seconds` | gauge | database, namespace, cursor | How long the oldest unhandled event has waited |
+| `lytecache_subscriber_gap` | gauge | database, namespace, cursor | 1 if the cursor lost events (outside retention) |
+
+`events_published_total` is a real counter, unlike the cache counters
+below. It is the events table's sequence high-water mark, stored in the
+file and shared by every process that publishes, so it only grows. It
+resets only if the file is recreated, which `rate()` handles. It is per
+database, not per channel, because an event's channel can't be counted
+once retention has deleted the event.
 
 **`hits_total`/`misses_total` will read 0 forever, and that's correct, not
 broken.** They're per-process counters on *this UI's own* `Cache` handle
@@ -269,7 +396,21 @@ groups:
         for: 5m
         annotations:
           summary: "{{ $labels.database }} is not readable by lytecache ui"
+
+      - alert: LytecacheSubscriberLagging
+        expr: lytecache_subscriber_lag_seconds > 60
+        for: 5m
+        annotations:
+          summary: "{{ $labels.database }} subscriber {{ $labels.cursor }} is {{ $value | humanizeDuration }} behind"
+
+      - alert: LytecacheSubscriberLostEvents
+        expr: lytecache_subscriber_gap == 1
+        annotations:
+          summary: "{{ $labels.database }} subscriber {{ $labels.cursor }} fell outside event retention and lost events"
 ```
+
+Tune `LytecacheSubscriberLagging`'s threshold to your subscriber. For an
+invalidation worker, a minute is already a long time to serve stale data.
 
 `/metrics` is exempt from the login-page requirement everywhere else in
 this UI (a Prometheus scraper can't do an interactive login) but is still

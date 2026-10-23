@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	lytecache "github.com/lytecache/lytecache-go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -65,6 +66,32 @@ var (
 	expiredRemovedDesc = prometheus.NewDesc(
 		"lytecache_expired_removed_total", "Expired keys removed by THIS UI's own Cache handle (per-process; moves only if a maintenance pass is run from this UI).",
 		[]string{"database"}, nil)
+
+	// Event metrics, emitted only for files that have an events table.
+	eventsRetainedDesc = prometheus.NewDesc(
+		"lytecache_events_retained", "Events currently retained in the file, per channel.",
+		[]string{"database", "channel"}, nil)
+	// A real Counter, unlike the cache counters above: it is the events
+	// table's AUTOINCREMENT high-water mark, which is persisted in the file
+	// and shared by every publishing process, so it only ever grows (it
+	// resets only if the file is recreated, which rate() handles). It is
+	// per database, not per channel: once retention deletes an event, its
+	// channel can no longer be attributed.
+	eventsPublishedDesc = prometheus.NewDesc(
+		"lytecache_events_published_total", "Events ever published to this file, by any process (the last seq assigned).",
+		[]string{"database"}, nil)
+	eventOldestAgeDesc = prometheus.NewDesc(
+		"lytecache_event_oldest_age_seconds", "Age of the oldest retained event; absent when none is retained.",
+		[]string{"database"}, nil)
+	subscriberLagEventsDesc = prometheus.NewDesc(
+		"lytecache_subscriber_lag_events", "How far a named cursor is behind the newest seq (an upper bound: seq spans every channel).",
+		[]string{"database", "namespace", "cursor"}, nil)
+	subscriberLagSecondsDesc = prometheus.NewDesc(
+		"lytecache_subscriber_lag_seconds", "How long the oldest event after a named cursor has been waiting; 0 when caught up.",
+		[]string{"database", "namespace", "cursor"}, nil)
+	subscriberGapDesc = prometheus.NewDesc(
+		"lytecache_subscriber_gap", "1 if a named cursor is outside the retained range (it lost events and will get a gap error on resume), else 0.",
+		[]string{"database", "namespace", "cursor"}, nil)
 
 	scrapeDurationDesc = prometheus.NewDesc(
 		"lytecache_ui_scrape_duration_seconds", "Time spent computing this scrape's metrics.", nil, nil)
@@ -170,6 +197,43 @@ func (c *metricsCollector) collectDatabase(name string) []prometheus.Metric {
 		)
 	}
 
+	return append(metrics, collectEvents(name, dc)...)
+}
+
+// collectEvents reads only EventStats/EventChannelStats/Cursors/
+// RecentEvents -- pure reads that never create the events table.
+func collectEvents(name string, dc *lytecache.Cache) []prometheus.Metric {
+	info, err := dc.EventStats()
+	if err != nil || !info.Enabled {
+		return nil
+	}
+	now := time.Now()
+	metrics := []prometheus.Metric{
+		prometheus.MustNewConstMetric(eventsPublishedDesc, prometheus.CounterValue, float64(info.NewestSeq), name),
+	}
+	if info.Count > 0 {
+		metrics = append(metrics, prometheus.MustNewConstMetric(eventOldestAgeDesc, prometheus.GaugeValue,
+			max(0, now.Sub(info.OldestAt).Seconds()), name))
+	}
+	if channels, err := dc.EventChannelStats(); err == nil {
+		for _, ch := range channels {
+			metrics = append(metrics, prometheus.MustNewConstMetric(eventsRetainedDesc, prometheus.GaugeValue, float64(ch.Count), name, ch.Channel))
+		}
+	}
+	if cursors, err := BuildCursorRows(dc, info, now); err == nil {
+		for _, cr := range cursors {
+			gap := 0.0
+			if cr.Lost || cr.Ahead {
+				gap = 1
+			}
+			metrics = append(metrics,
+				prometheus.MustNewConstMetric(subscriberLagEventsDesc, prometheus.GaugeValue, float64(cr.LagEvents), name, cr.Namespace, cr.Name),
+				prometheus.MustNewConstMetric(subscriberGapDesc, prometheus.GaugeValue, gap, name, cr.Namespace, cr.Name))
+			if cr.LagKnown {
+				metrics = append(metrics, prometheus.MustNewConstMetric(subscriberLagSecondsDesc, prometheus.GaugeValue, cr.LagSeconds, name, cr.Namespace, cr.Name))
+			}
+		}
+	}
 	return metrics
 }
 

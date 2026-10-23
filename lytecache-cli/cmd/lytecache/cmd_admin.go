@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -25,11 +26,18 @@ const currentSchemaVersion = 1
 
 func newStatsCmd(flags *globalFlags) *cobra.Command {
 	var asJSON bool
+	var watchSeconds float64
 	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Show cache statistics",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("watch") {
+				if watchSeconds <= 0 {
+					return usageErrorf("--watch interval must be positive")
+				}
+				return runStatsWatch(cmd, flags, time.Duration(watchSeconds*float64(time.Second)))
+			}
 			c, closeFn, err := openCache(flags, true)
 			if err != nil {
 				return err
@@ -39,6 +47,8 @@ func newStatsCmd(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable JSON output")
+	cmd.Flags().Float64Var(&watchSeconds, "watch", 2, "redraw every N seconds (default 2) until Ctrl-C")
+	cmd.Flags().Lookup("watch").NoOptDefVal = "2"
 	return cmd
 }
 

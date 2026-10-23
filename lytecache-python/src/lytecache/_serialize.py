@@ -41,6 +41,29 @@ def _encode_json(value: Any) -> bytes:
     return text.encode("utf-8")
 
 
+def encode_json_text(value: Any) -> str:
+    """Encode one hash field value as JSON text, with the same rules as code 4.
+
+    NaN and infinities are rejected: they are not valid JSON, and a document
+    containing them would not be readable by SQLite's JSON functions or by
+    the other lytecache implementations.
+    """
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=_json_default,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise SerializationError(
+            f"cannot store a value of type {type(value).__name__!r} in a hash field: {exc}. "
+            "Hash fields hold JSON values (str, int, float, bool, None, dict, list, "
+            "dataclasses, plain objects); bytes and pickled values are not supported."
+        ) from exc
+
+
 def serialize(value: Any, *, mode: str) -> tuple[bytes, int]:
     """Encode a Python value to (blob, value_type) under the given serializer mode.
 

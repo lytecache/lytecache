@@ -185,6 +185,9 @@ func buildPersistedUIArgs(cmd *cobra.Command, v *uiFlagVars) []string {
 	for _, pattern := range v.maskKeys {
 		args = append(args, "--mask-keys", pattern)
 	}
+	for _, pattern := range v.maskChannels {
+		args = append(args, "--mask-channels", pattern)
+	}
 	if cmd.Flags().Changed("metrics-token") {
 		args = append(args, "--metrics-token", v.metricsToken)
 	}

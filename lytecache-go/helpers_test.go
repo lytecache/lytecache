@@ -1,6 +1,8 @@
 package lytecache_test
 
 import (
+	"io"
+	"log/slog"
 	"path/filepath"
 	"testing"
 
@@ -28,3 +30,5 @@ func tempDBPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "cache.db")
 }
+
+func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

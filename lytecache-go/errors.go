@@ -28,4 +28,21 @@ var (
 	// ErrNotNumeric is returned by Incr, Decr, and IncrFloat when the
 	// existing value for a key is not a numeric type.
 	ErrNotNumeric = errors.New("lytecache: existing value is not numeric")
+
+	// ErrOverflow is returned by HIncrBy/HIncrByFloat when the result would
+	// leave the representable range; nothing is written.
+	ErrOverflow = errors.New("lytecache: numeric overflow")
+
+	// ErrGap is matched (via errors.Is) by the [*GapError] that ends a
+	// [Subscription] whose events were deleted by retention before it read
+	// them.
+	ErrGap = errors.New("lytecache: events were lost to retention")
+
+	// ErrSubscriptionClosed is returned by [Subscription.Next] and
+	// [Subscription.TryNext] after the subscription is closed.
+	ErrSubscriptionClosed = errors.New("lytecache: subscription closed")
+
+	// ErrInvalidArgument is returned for an invalid channel name, watch
+	// pattern, option value or change-operation name.
+	ErrInvalidArgument = errors.New("lytecache: invalid argument")
 )

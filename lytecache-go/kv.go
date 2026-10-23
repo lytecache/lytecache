@@ -71,6 +71,7 @@ func (c *Cache) Set(key string, value any, opts ...SetOption) error {
 	if err != nil {
 		return fmt.Errorf("lytecache: set %q: %w", key, err)
 	}
+	c.changed(opSet, []string{key}, 1)
 	c.maybeEvict()
 	c.maybeOpportunisticSweep()
 	return nil
@@ -186,6 +187,9 @@ func (c *Cache) Delete(keys ...string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("lytecache: delete: %w", err)
 	}
+	if n > 0 {
+		c.changed(opDelete, dedupe(keys), int(n))
+	}
 	return int(n), nil
 }
 
@@ -215,6 +219,10 @@ func (c *Cache) Exists(key string) (bool, error) {
 // Add sets key only if it is currently absent or expired (Redis "SET NX"),
 // atomically. It reports whether the value was set.
 func (c *Cache) Add(key string, value any, opts ...SetOption) (bool, error) {
+	return c.add(key, value, true, opts...)
+}
+
+func (c *Cache) add(key string, value any, emit bool, opts ...SetOption) (bool, error) {
 	so := applySetOptions(opts)
 	data, typeCode, err := encodeValue(value)
 	if err != nil {
@@ -238,6 +246,9 @@ WHERE cache.expires_at IS NOT NULL AND cache.expires_at <= ?`
 		return false, fmt.Errorf("lytecache: add %q: %w", key, err)
 	}
 	if n > 0 {
+		if emit {
+			c.changed(opSet, []string{key}, 1)
+		}
 		c.maybeEvict()
 	}
 	c.maybeOpportunisticSweep()
@@ -264,6 +275,9 @@ WHERE namespace = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)`
 	n, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("lytecache: replace %q: %w", key, err)
+	}
+	if n > 0 {
+		c.changed(opSet, []string{key}, 1)
 	}
 	c.maybeOpportunisticSweep()
 	return n > 0, nil
@@ -314,6 +328,7 @@ ON CONFLICT(namespace, key) DO UPDATE SET
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("lytecache: getset %q: %w", key, err)
 	}
+	c.changed(opSet, []string{key}, 1)
 	c.maybeOpportunisticSweep()
 
 	if !hadPrevious {
@@ -364,6 +379,8 @@ func (c *Cache) SetMany(entries map[string]any, opts ...SetOption) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("lytecache: setmany: %w", err)
 	}
+	// ONE change record for the whole batch, never one per key.
+	c.changed(opSet, sortedKeys(entries), len(entries))
 	c.maybeEvict()
 	c.maybeOpportunisticSweep()
 	return nil
@@ -381,6 +398,10 @@ type RawValue struct {
 func (rv RawValue) Decode(dest any) error {
 	return decodeInto(rv.Data, rv.typeCode, dest)
 }
+
+// ValueType returns the stored value_type code (0-6; see SPEC.md), for
+// tools that display a value without knowing its Go type in advance.
+func (rv RawValue) ValueType() int { return rv.typeCode }
 
 // GetMany reads all of the given keys in a single query, skipping missing
 // or expired keys rather than erroring. Decode each result with

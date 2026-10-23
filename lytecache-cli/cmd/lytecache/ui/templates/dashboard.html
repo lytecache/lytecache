@@ -21,7 +21,7 @@ operator, not from the browser.</p>
 <thead><tr>
 <th>Name</th><th>Keys</th><th>Size</th><th>Max bytes</th><th>Max keys</th>
 <th>Namespaces</th><th>Hit rate</th><th>Evictions</th><th>Expired removed</th>
-<th>Expired present</th><th>Schema</th><th>Status</th>
+<th>Expired present</th><th>Events</th><th>Publish rate</th><th>Schema</th><th>Status</th>
 </tr></thead>
 <tbody>
 {{range .Rows}}
@@ -36,6 +36,8 @@ operator, not from the browser.</p>
 <td class="num">{{.Evictions}}</td>
 <td class="num">{{.ExpiredRemoved}}</td>
 <td class="num">{{.ExpiredPresent}}</td>
+<td class="num">{{if .EventsEnabled}}<a href="/db/{{.Name}}/events">{{.RetainedEvents}}</a>{{if .LostCursors}} <span class="pill pill-error" title="A subscriber's cursor is outside the retained range: it lost events">lost</span>{{end}}{{else}}–{{end}}</td>
+<td class="num">{{.PublishRateDisplay}}</td>
 <td class="num">{{.SchemaVersion}}</td>
 <td>
 {{- if .Err}}<span class="pill pill-error" title="{{.Err}}">error</span>

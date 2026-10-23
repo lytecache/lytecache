@@ -39,7 +39,7 @@ func (c *Cache) Lock(name string, timeout time.Duration) (*Lock, error) {
 	deadline := time.Now().Add(timeout)
 
 	for {
-		ok, err := c.Add(lockKey, token, TTL(timeout))
+		ok, err := c.add(lockKey, token, false, TTL(timeout))
 		if err != nil {
 			return nil, fmt.Errorf("lytecache: lock %q: %w", name, err)
 		}

@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented in this file.
 
+
+## [Unreleased]
+
+### Added
+
+- `notify <channel> [payload]`, `watch <channel-pattern>... [--from-seq N] [--count N]`
+  (one JSON line per event), and `events [--limit N] [--json]` for lytecache's local event
+  notification (single host only, polled, durable).
+- `hget`, `hgetall` and `hset` for field-level access to JSON object values.
+- Admin UI: an **Events** tab per database, greyed out for files that never used
+  notification. It has:
+  - a live tail with a channel filter (the same rule as `watch`), adaptive refresh and a
+    pause button, and an event viewer that reuses the value viewer;
+  - a retention panel with the publish rate and per-channel counts;
+  - **subscriber lag** for every saved cursor, flagging cursors that lost events
+    (outside retention).
+  There is deliberately no route that publishes an event. Under `--allow-delete`, events
+  can be purged (one event, older than an age, or a whole channel with typed
+  confirmation), and every purge is audit-logged.
+- Fleet dashboard: retained-event and publish-rate columns, and an unhealthy flag for a
+  database with a subscriber that lost events.
+- `/metrics`: `lytecache_events_retained`, `lytecache_events_published_total` (a real
+  counter), `lytecache_event_oldest_age_seconds`, `lytecache_subscriber_lag_events`,
+  `lytecache_subscriber_lag_seconds` and `lytecache_subscriber_gap`. docs/ui.md adds alert
+  rules for lag and for lost events.
+- `--mask-channels <glob>` redacts whole channels' event payloads, and `--mask-keys` now
+  also redacts event payloads that reference a matching key or field.
+- `ui.yaml` `databases:` entries accept `event_retention` (the application's retention,
+  shown on the Events tab).
+
+### Fixed
+
+- The UI's database handles no longer run lytecache's background sweeper (an inspection
+  tool must not write to files unless asked), and neither the UI nor `lytecache maintain`
+  deletes events any more. Both had been applying the library's default 1 h event
+  retention, whatever the application had configured. Neither bug was ever released.
+
+### Changed
+
+- `watch` now tails events. The old stats redraw moved to `stats --watch[=seconds]`;
+  `watch` with no arguments or a single number still works, with a deprecation note.
+- Requires the unreleased lytecache-go hash and event APIs. Development builds use the
+  repository's `go.work`; tag a lytecache-go release and bump `go.mod` before releasing
+  the CLI.
+
 ## [Unreleased]
 
 - `lytecache ui`: a local web administration console (RedisInsight/pgAdmin-style, not a cache

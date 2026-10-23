@@ -339,6 +339,12 @@
          .api-group{ margin-bottom:var(--space-12); }
          .api-group h3{ display:flex; align-items:baseline; gap:.6em; }
          .api-group .sig{ font-size:.78rem; color:var(--text-dim); font-weight:400; font-family:var(--font-mono); }
+         /* ============================= GUIDES ============================= */
+         .caveat{ border-left:3px solid var(--border); padding-left:var(--space-3); color:var(--text-dim); font-size:.92rem; }
+         .caveat strong{ color:var(--text); }
+         .section h3[id^="ts-"]{ font-family:var(--font-body); font-size:1.05rem; }
+         .section ol:not(.steps) li{ margin-bottom:var(--space-3); }
+         .table-wrap td[rowspan]{ vertical-align:middle; }
          /* ============================= FOOTER ============================= */
          footer{ border-top:1px solid var(--border); padding:var(--space-12) var(--space-8); }
          .footer-inner{ max-width:1180px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; gap:var(--space-4); flex-wrap:wrap; }
@@ -396,20 +402,25 @@
       <div class="shell">
          <aside class="sidebar" id="sidebar">
             <div class="nav-group">
-               <div class="nav-group-title">Overview</div>
+               <div class="nav-group-title">Start here</div>
                <a href="#quickstart">Quickstart</a>
+               <a href="#first-cache">Your first cache</a>
                <a href="#where-is-my-data">Where is my data?</a>
-               <a href="#when-to-use">When to use Lytecache</a>
+               <a href="#when-to-use">When to use lytecache</a>
             </div>
             <div class="nav-group">
-               <div class="nav-group-title">Guide</div>
+               <div class="nav-group-title">Guides</div>
+               <a href="#recipes">Recipes</a>
+               <a href="#from-redis">Coming from Redis</a>
+               <a href="#frameworks">Framework integration</a>
+               <a href="#troubleshooting">Troubleshooting</a>
                <a href="#ttl">TTL &amp; expiration</a>
                <a href="#flush-delete">Flush &amp; delete</a>
-               <a href="#configuration">Configuration</a>
             </div>
             <div class="nav-group">
-               <div class="nav-group-title">API reference</div>
-               <a href="#api-reference">Overview</a>
+               <div class="nav-group-title">Reference</div>
+               <a href="#configuration">Configuration</a>
+               <a href="#api-reference">Method reference</a>
                <a href="#api-set-get">Set &amp; get</a>
                <a href="#api-objects">Objects &amp; generics</a>
                <a href="#api-atomic">Add / replace / swap</a>
@@ -419,14 +430,14 @@
                <a href="#api-stats">Stats &amp; maintenance</a>
                <a href="#api-locks">Distributed locks</a>
                <a href="#api-memoize">Memoize</a>
-            </div>
-            <div class="nav-group">
-               <div class="nav-group-title">Cross-language</div>
+               <a href="#api-hashes">Hashes (JSON fields)</a>
+               <a href="#api-events">Local events</a>
+               <a href="#api-on-change">Change listeners</a>
                <a href="#storage-spec">Storage spec &amp; type codes</a>
                <a href="#glossary">Glossary</a>
             </div>
             <div class="nav-group">
-               <div class="nav-group-title">Tooling</div>
+               <div class="nav-group-title">Tools</div>
                <a href="#cli">CLI</a>
                <a href="#ui">Admin UI</a>
             </div>
@@ -437,7 +448,7 @@
                   <div class="hero-heading">
                      <p class="eyebrow">Embedded key-value store</p>
                      <h1><span class="nobr">Redis-like caching.</span> <span class="hl nobr">Zero infrastructure.</span></h1>
-                     <p class="lead">One local SQLite file stands in for the server. <code>set</code>, <code>get</code>, TTLs, atomic counters, eviction, and process-safe locks — implemented natively in whichever language you already write, all reading and writing the very same file.</p>
+                     <p class="lead">One SQLite file replaces the cache server. You get <code>set</code>, <code>get</code>, TTLs, atomic counters, eviction and process-safe locks. Each language has its own native implementation, and they all read and write the same file.</p>
                   </div>
                   <div class="hero-columns">
                   <div>
@@ -554,7 +565,7 @@ $cache->incr("hits");</code></pre>
                   </div>
                   <div class="feature">
                      <h4>One file format</h4>
-                     <p>Every implementation reads and writes the identical schema — even the same counters.</p>
+                     <p>Every implementation reads and writes the same schema, down to how counters are stored.</p>
                   </div>
                   <div class="feature">
                      <h4>Atomic under load</h4>
@@ -567,9 +578,9 @@ $cache->incr("hits");</code></pre>
                </div>
             </section>
             <section class="section" id="quickstart">
-               <p class="eyebrow">Overview</p>
+               <p class="eyebrow">Start here</p>
                <h2>Quickstart</h2>
-               <p class="lead">Add the dependency, then use it. No path, no server, no migration step.</p>
+               <p class="lead">Add the dependency and start calling it. There is no path to configure and no migration to run.</p>
                <div class="snippet lang-group">
                   <div class="snippet-head">
                      <div class="pillrow" role="tablist" aria-label="Language">
@@ -591,12 +602,12 @@ cache.incr("hits")                      # 1</code></pre>
                   </div>
                   <div class="snippet-pane" data-lang="java">
                      <pre><code data-syntax="java">import io.lytecache.LyteCache;
-    import java.time.Duration;
+import java.time.Duration;
 
-    try (LyteCache cache = new LyteCache()) {
-        cache.set("user:42", "Samson", Duration.ofMinutes(5));
-        cache.getString("user:42");          // "Samson"
-        cache.incr("hits");                  // 1
+try (LyteCache cache = new LyteCache()) {
+    cache.set("user:42", "Samson", Duration.ofMinutes(5));
+    cache.getString("user:42");          // "Samson"
+    cache.incr("hits");                  // 1
 }</code></pre>
                   </div>
                   <div class="snippet-pane" data-lang="node">
@@ -625,12 +636,143 @@ $cache->get("user:42");                 // ["name" => "Samson"]
 $cache->incr("hits");                   // 1</code></pre>
                   </div>
                </div>
-               <p>All five are disposable: <code>with LyteCache() as cache:</code> in Python, <code>try (LyteCache cache = new LyteCache())</code> in Java, <code>using cache = new LyteCache()</code> in Node.js (or call <code>cache[Symbol.dispose]()</code> directly), <code>defer cache.Close()</code> in Go, and PHP's <code>__destruct()</code> flushes and closes automatically even if you never call <code>$cache-&gt;close()</code> yourself. Closing flushes any buffered state and stops the background sweeper cleanly (PHP has no background sweeper -- see <a href="#ttl">TTL &amp; expiration</a>).</p>
+               <p>Close the cache when you're done with it. Each language has its own idiom: <code>with LyteCache() as cache:</code> in Python, <code>try (LyteCache cache = new LyteCache())</code> in Java, <code>using cache = new LyteCache()</code> in Node.js (or call <code>cache[Symbol.dispose]()</code> directly), and <code>defer cache.Close()</code> in Go. PHP closes the cache in <code>__destruct()</code>, so you never have to call <code>$cache-&gt;close()</code> yourself. Closing flushes buffered state and stops the background sweeper. PHP has no background sweeper; <a href="#ttl">TTL &amp; expiration</a> explains what it does instead.</p>
+            </section>
+            <section class="section" id="first-cache">
+               <p class="eyebrow">Start here</p>
+               <h2>Your first cache</h2>
+               <p class="lead">About ten minutes, one script. You'll cache a slow HTTP call, share the cache between two processes, and look at the result from a shell. The tutorial uses Python. The other four languages work the same way, and every <a href="#api-reference">reference</a> group shows their method names on the toggle.</p>
+               <ol class="steps">
+                  <li>
+                     <h4>Install it and store one value</h4>
+                     <p>Run <code>pip install lytecache</code>, then try the smallest program that does something:</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">Python</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="python">from lytecache import LyteCache
+
+cache = LyteCache()
+cache.set("greeting", "hello")
+print(cache.get("greeting"))</code></pre>
+                     </div>
+                     <p>It prints <code>hello</code>. You didn't start a server or choose a file. The first write created the file, and step 5 shows you where it is.</p>
+                  </li>
+                  <li>
+                     <h4>Make a slow call twice</h4>
+                     <p>Save this as <code>slow_api.py</code>. <code>httpbin.org/delay/1</code> waits a second before it answers, standing in for any slow or rate-limited API.</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">slow_api.py</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="python">import json
+import time
+import urllib.request
+
+from lytecache import LyteCache
+
+cache = LyteCache()
+URL = "https://httpbin.org/delay/1"   # waits one second on purpose
+
+
+def fetch(url):
+    key = f"http:{url}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    with urllib.request.urlopen(url) as resp:
+        data = json.load(resp)
+    cache.set(key, data)
+    return data
+
+
+for attempt in (1, 2):
+    start = time.perf_counter()
+    fetch(URL)
+    print(f"call {attempt}: {(time.perf_counter() - start) * 1000:.2f} ms")</code></pre>
+                     </div>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">Terminal</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="bash">$ python slow_api.py
+call 1: 1399.60 ms
+call 2: 0.10 ms</code></pre>
+                     </div>
+                     <p>The first call went over the network and took 1.4 seconds. The second came from the cache in a tenth of a millisecond: one SQLite read from a file on your disk. Your numbers will differ. The gap won't.</p>
+                  </li>
+                  <li>
+                     <h4>Give the data an expiry</h4>
+                     <p>Right now the response is cached forever. Change the <code>set</code> line to give it a TTL:</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">slow_api.py</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="python">    cache.set(key, data, ttl=300)   # seconds</code></pre>
+                     </div>
+                     <p>Choose the number by asking how stale an answer you can live with. An exchange-rate feed that updates every few minutes is fine at 300 seconds. A user's own profile, which they expect to change the moment they edit it, shouldn't wait for a TTL at all: delete it when it changes (see <a href="#recipe-invalidate">Invalidate on write</a>). The unit is seconds, so <code>ttl=300000</code> would be 83 hours.</p>
+                     <p>Run the script now and both calls still hit the cache. The entry from step 2 was written without a TTL, and <code>fetch()</code> only writes on a miss, so your change hasn't touched it. A new TTL only applies to entries written after the change, which is worth remembering in production too. Clear the cache once and run it again:</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">Terminal</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="bash">$ python -c "from lytecache import LyteCache; LyteCache().flush()"
+$ python slow_api.py
+call 1: 1471.90 ms
+call 2: 0.10 ms</code></pre>
+                     </div>
+                  </li>
+                  <li>
+                     <h4>Run it from a second process</h4>
+                     <p>Run the script again from the same directory, or from a second terminal:</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">Terminal</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="bash">$ python slow_api.py
+call 1: 0.04 ms
+call 2: 0.02 ms</code></pre>
+                     </div>
+                     <p>Both calls were hits. This is a brand-new process with nothing in memory, and it found the entry the last run wrote. This is where lytecache stops looking like a dictionary. The cache lives in a file, so every process that opens it shares it, and it survives restarts. A Node.js or Go program started from the same directory would read the same entry.</p>
+                  </li>
+                  <li>
+                     <h4>Look at it from the shell</h4>
+                     <p>Install the CLI (<code>brew install lytecache/tap/lytecache</code>; other platforms are in <a href="#cli">Install</a>) and run it from the same directory:</p>
+                     <div class="snippet">
+                        <div class="snippet-head">
+                           <span class="install-label">Terminal</span>
+                           <button class="copy-btn" data-copy>Copy</button>
+                        </div>
+                        <pre><code data-syntax="bash">$ lytecache which
+/Users/you/Library/Caches/lytecache/fb0e4baed14c.db
+(exists)
+$ lytecache keys --long
+KEY                               TYPE  TTL    SIZE
+http:https://httpbin.org/delay/1  json  299.5  261
+$ lytecache get 'http:https://httpbin.org/delay/1'
+{
+  "args": {},
+  "data": "",
+  ...</code></pre>
+                     </div>
+                     <p><code>which</code> shows the file your script created. Its name comes from the directory you ran in, so the CLI finds it with no flags as long as you run it from the same place. <code>keys --long</code> shows the key, its type (<code>json</code>, because the response was a dict), the seconds left on its TTL, and its size. Seeing the row is usually what makes the model click: it's data in a file, and anything that can open the file can read it.</p>
+                  </li>
+                  <li>
+                     <h4>What to read next</h4>
+                     <p>The <a href="#recipes">recipes</a> cover what you'll want next: <a href="#recipe-api">caching API calls with memoize</a>, <a href="#recipe-stampede">avoiding a stampede</a> when a hot key expires, and <a href="#recipe-idempotency">idempotency keys</a>. If something doesn't behave the way this tutorial did, start with <a href="#troubleshooting">Troubleshooting</a>.</p>
+                  </li>
+               </ol>
             </section>
             <section class="section" id="where-is-my-data">
-               <p class="eyebrow">Overview</p>
+               <p class="eyebrow">Start here</p>
                <h2>Where is my data?</h2>
-               <p class="lead">By default, every implementation resolves the exact same file for the same project — so a Python, Java, Node.js, Go, or PHP process started from the same directory all share one cache automatically.</p>
+               <p class="lead">Every implementation picks the same default file for the same project. Start a Python script and a Go service from the same directory and they share one cache, with nothing to configure.</p>
                <pre class="path-example">&lt;platform cache dir&gt;/lytecache/&lt;project-id&gt;.db</pre>
                <div class="table-wrap">
                   <table>
@@ -656,22 +798,1072 @@ $cache->incr("hits");                   // 1</code></pre>
                      </tbody>
                   </table>
                </div>
-               <p><code>&lt;project-id&gt;</code> is the first 12 hex characters of the SHA-256 hash of your current working directory's resolved, absolute path — an identical derivation in every implementation, so every project gets its own file and nothing is left behind in your repo. (See the <a href="#glossary">glossary</a> if "SHA-256" is new to you.)</p>
+               <p><code>&lt;project-id&gt;</code> is the first 12 hex characters of the SHA-256 hash of your working directory's resolved absolute path. Every implementation derives it the same way, so a Python script and a Java service started from the same directory land on the same file. Nothing is written into your repo. (The <a href="#glossary">glossary</a> explains SHA-256.)</p>
                <h3>Overriding it</h3>
                <ul>
-                  <li>Pass an explicit path — <code>LyteCache("/data/cache.db")</code> in Python, <code>.path(Path.of("/data/cache.db"))</code> on the Java builder, <code>new LyteCache({ path: "/data/cache.db" })</code> in Node.js, <code>lytecache.WithPath("/data/cache.db")</code> in Go, <code>new LyteCache(path: "/data/cache.db")</code> in PHP.</li>
-                  <li>Set <code>LYTECACHE_PATH=/data/cache.db</code> in the environment — takes priority over the default in every language.</li>
+                  <li>Pass an explicit path: <code>LyteCache("/data/cache.db")</code> in Python, <code>.path(Path.of("/data/cache.db"))</code> on the Java builder, <code>new LyteCache({ path: "/data/cache.db" })</code> in Node.js, <code>lytecache.WithPath("/data/cache.db")</code> in Go, <code>new LyteCache(path: "/data/cache.db")</code> in PHP.</li>
+                  <li>Set <code>LYTECACHE_PATH=/data/cache.db</code> in the environment. It overrides the default in every language.</li>
                </ul>
-               <p>Introspect it programmatically: <code>LyteCache.default_path()</code> / <code>cache.path</code> in Python, <code>LyteCache.defaultPath()</code> / <code>cache.path()</code> in Java, <code>LyteCache.defaultPath()</code> / <code>cache.path</code> in Node.js, <code>lytecache.DefaultPath()</code> / <code>cache.Path()</code> in Go, <code>LyteCache::defaultPath()</code> / <code>$cache-&gt;path()</code> in PHP. The file is never a mystery.</p>
-               <p>Laravel is the one exception: its cache driver defaults to <code>storage_path('framework/cache/lytecache.db')</code> instead of the platform cache directory above, since that's where a Laravel app expects its cache files to live — configurable in <code>config/cache.php</code>'s <code>stores.lytecache.path</code>.</p>
+               <p>To find out which file a cache is using, ask it: <code>LyteCache.default_path()</code> / <code>cache.path</code> in Python, <code>LyteCache.defaultPath()</code> / <code>cache.path()</code> in Java, <code>LyteCache.defaultPath()</code> / <code>cache.path</code> in Node.js, <code>lytecache.DefaultPath()</code> / <code>cache.Path()</code> in Go, <code>LyteCache::defaultPath()</code> / <code>$cache-&gt;path()</code> in PHP. From a shell, <code>lytecache which</code> prints the path and whether the file exists.</p>
+               <p>Laravel is the one exception. Its cache driver defaults to <code>storage_path('framework/cache/lytecache.db')</code>, because that's where a Laravel app keeps its cache files. Change it with <code>stores.lytecache.path</code> in <code>config/cache.php</code>.</p>
+            </section>
+            <section class="section" id="when-to-use">
+               <p class="eyebrow">Start here</p>
+               <h2>When to use lytecache</h2>
+               <div class="fit-grid">
+                  <div class="fit-col">
+                     <h3><span class="fit-mark yes">✓</span> Good fit</h3>
+                     <ul>
+                        <li>Single-node apps (or single-machine, multi-process apps) that want caching, counters, or TTLs with zero infrastructure</li>
+                        <li>Scripts, CLIs, notebooks, small web services, background jobs, test fixtures</li>
+                        <li>A cache that survives process restarts without a separate daemon</li>
+                        <li>Multi-process coordination via the process-safe distributed lock</li>
+                        <li>Mixed-language systems, where Python, Java, Node.js, Go and PHP processes share one cache file</li>
+                        <li>Laravel apps that want <code>Cache::remember()</code> and <code>Cache::lock()</code> without running Redis. Switching the driver is one config line.</li>
+                     </ul>
+                  </div>
+                  <div class="fit-col">
+                     <h3><span class="fit-mark no">✕</span> Not a good fit</h3>
+                     <ul>
+                        <li>A cache shared live across several servers. SQLite is a local file, not a network service, so use Redis or Memcached.</li>
+                        <li>Heavy write traffic from many processes. SQLite allows one writer at a time, so writes queue up and become the bottleneck.</li>
+                        <li>Pub/sub across machines, streams with consumer groups, sorted sets, or other Redis data structures beyond key-value, counters and hashes. (Events between processes on one host do work; see <a href="#api-events">Local events</a>.)</li>
+                        <li>Complex queries over cached data. Use a real database.</li>
+                     </ul>
+                  </div>
+               </div>
+            </section>
+            <section class="section" id="recipes">
+               <p class="eyebrow">Guides</p>
+               <h2>Recipes</h2>
+               <p class="lead">Task-first answers to the things people actually build with lytecache. Each recipe says when to use it, shows it in all five languages, and ends with the catch.</p>
+               <div class="api-group" id="recipe-api">
+                  <h3>Cache an API or HTTP response</h3>
+                  <p>Use read-through caching when an upstream answer is slow, rate-limited or billed per call, and a slightly old answer is acceptable. <code>memoize</code> checks the cache, calls your function on a miss, and stores what it returns.</p>
+                  <p>Set the TTL from how fast the data really changes, not from how often you call it. Exchange rates that update every few minutes can live for five minutes. A product catalogue edited twice a day can live for an hour.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python">@cache.memoize(ttl=300)             # rates update every few minutes
+def exchange_rates(base):
+    resp = requests.get(f"https://api.example.com/rates?base={base}", timeout=5)
+    resp.raise_for_status()         # an exception is never cached
+    return resp.json()
+
+exchange_rates("USD")   # network
+exchange_rates("USD")   # cache, for the next 300 seconds</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">Rates rates = cache.memoize("rates:" + base, Duration.ofMinutes(5),
+    () -&gt; ratesClient.fetch(base));    // an exception is never cached</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">// memoizeAsync for a loader that returns a Promise
+const rates = await cache.memoizeAsync(`rates:${base}`, 300, async () =&gt; {
+  const resp = await fetch(`https://api.example.com/rates?base=${base}`);
+  if (!resp.ok) throw new Error(`rates: HTTP ${resp.status}`); // never cached
+  return resp.json();
+});</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">rates, err := lytecache.Memoize(cache, "rates:"+base, 5*time.Minute,
+    func() (Rates, error) {
+        return ratesClient.Fetch(base) // a non-nil error is never cached
+    })</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">$rates = $cache-&gt;remember("rates:{$base}", 300, function () use ($http, $base) {
+    return $http-&gt;get("https://api.example.com/rates", ["base" =&gt; $base])
+        -&gt;throw()                       // an exception is never cached
+        -&gt;json();
+});</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> Whatever your function returns is cached for the full TTL, including a 200 response that contains an error message. Check the response before you return it, as the examples do. <code>memoize</code> also doesn't protect against a stampede when a popular key expires; the next recipe does.</p>
+               </div>
+               <div class="api-group" id="recipe-stampede">
+                  <h3>Avoid a cache stampede</h3>
+                  <p>When a hot key expires, every request that arrives before it's rebuilt misses at once, and they all hit the slow backend together. If the rebuild is expensive, that pile-up can take the backend down.</p>
+                  <p>Take a lock around the rebuild, then check the cache again once you hold it. The first request rebuilds. The others wait, find the fresh value on their second check, and never touch the backend.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python">def get_report(day):
+    key = f"report:{day}"
+    report = cache.get(key)
+    if report is not None:
+        return report
+    with cache.lock(f"rebuild:{key}", timeout=30):
+        report = cache.get(key)          # rebuilt while we waited?
+        if report is None:
+            report = build_report(day)   # the slow part
+            cache.set(key, report, ttl=600)
+    return report</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">Report getReport(String day) {
+    String key = "report:" + day;
+    Report report = cache.get(key, Report.class);
+    if (report != null) return report;
+    try (CacheLock lock = cache.lock("rebuild:" + key, Duration.ofSeconds(30))) {
+        report = cache.get(key, Report.class);   // rebuilt while we waited?
+        if (report == null) {
+            report = buildReport(day);           // the slow part
+            cache.set(key, report, Duration.ofMinutes(10));
+        }
+    }
+    return report;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">function getReport(day: string): Report {
+  const key = `report:${day}`;
+  let report = cache.get&lt;Report&gt;(key);
+  if (report !== undefined) return report;
+  using lock = cache.lock(`rebuild:${key}`, { timeoutMs: 30_000 });
+  report = cache.get&lt;Report&gt;(key);         // rebuilt while we waited?
+  if (report === undefined) {
+    report = buildReport(day);             // the slow part
+    cache.set(key, report, { ttl: 600 });
+  }
+  return report;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">func getReport(day string) (Report, error) {
+    key := "report:" + day
+    var r Report
+    if found, err := cache.Get(key, &amp;r); err != nil || found {
+        return r, err
+    }
+    lock, err := cache.Lock("rebuild:"+key, 30*time.Second)
+    if err != nil {
+        return r, err // lytecache.ErrLockTimeout if a rebuild takes too long
+    }
+    defer lock.Release()
+    if found, err := cache.Get(key, &amp;r); err != nil || found { // rebuilt while we waited?
+        return r, err
+    }
+    if r, err = buildReport(day); err != nil { // the slow part
+        return r, err
+    }
+    return r, cache.Set(key, r, lytecache.TTL(10*time.Minute))
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">function getReport(LyteCache $cache, string $day): array
+{
+    $key = "report:{$day}";
+    $report = $cache-&gt;get($key);
+    if ($report !== null) {
+        return $report;
+    }
+    return $cache-&gt;lock("rebuild:{$key}", timeout: 30.0)-&gt;block(function () use ($cache, $key, $day) {
+        $report = $cache-&gt;get($key);          // rebuilt while we waited?
+        if ($report === null) {
+            $report = buildReport($day);      // the slow part
+            $cache-&gt;set($key, $report, ttl: 600);
+        }
+        return $report;
+    });
+}</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> Waiting requests block for up to the lock timeout, and that timeout is also the lock's TTL. If a rebuild takes longer than the timeout, the lock expires and a second worker starts rebuilding too. Set the timeout well above your slowest rebuild. The lock only coordinates processes on this host.</p>
+               </div>
+               <div class="api-group" id="recipe-stale">
+                  <h3>Serve stale data when an upstream is down</h3>
+                  <p>Keep two copies of the answer: a short-lived "fresh" one that decides when you refetch, and a long-lived fallback you only read when the upstream fails. Your users see slightly old data instead of an error.</p>
+                  <p>Store when the data was fetched next to the data, so the UI can say "rates as of 14:02" instead of passing old numbers off as current.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python">def exchange_rates():
+    fresh = cache.get("rates:fresh")
+    if fresh is not None:
+        return fresh
+    try:
+        rates = {"data": fetch_rates(), "fetched_at": time.time()}
+    except UpstreamError:
+        stale = cache.get("rates:stale")
+        if stale is None:
+            raise                                 # nothing to fall back on
+        return {**stale, "stale": True}           # show "as of fetched_at"
+    cache.set("rates:fresh", rates, ttl=60)        # how often you want new data
+    cache.set("rates:stale", rates, ttl=24 * 3600) # how old still beats an error
+    return rates</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">record Rates(Map&lt;String, Double&gt; data, long fetchedAt, boolean stale) {}
+
+Rates exchangeRates() {
+    Rates fresh = cache.get("rates:fresh", Rates.class);
+    if (fresh != null) return fresh;
+    Rates rates;
+    try {
+        rates = new Rates(ratesClient.fetch(), System.currentTimeMillis(), false);
+    } catch (UpstreamException e) {
+        Rates stale = cache.get("rates:stale", Rates.class);
+        if (stale == null) throw e;                   // nothing to fall back on
+        return new Rates(stale.data(), stale.fetchedAt(), true);
+    }
+    cache.set("rates:fresh", rates, Duration.ofMinutes(1));
+    cache.set("rates:stale", rates, Duration.ofDays(1));
+    return rates;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">async function exchangeRates() {
+  const fresh = cache.get("rates:fresh");
+  if (fresh !== undefined) return fresh;
+  let rates;
+  try {
+    rates = { data: await fetchRates(), fetchedAt: Date.now() };
+  } catch (err) {
+    const stale = cache.get("rates:stale");
+    if (stale === undefined) throw err;           // nothing to fall back on
+    return { ...stale, stale: true };             // show "as of fetchedAt"
+  }
+  cache.set("rates:fresh", rates, { ttl: 60 });
+  cache.set("rates:stale", rates, { ttl: 24 * 3600 });
+  return rates;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">type Rates struct {
+    Data      map[string]float64 `json:"data"`
+    FetchedAt time.Time          `json:"fetched_at"`
+    Stale     bool               `json:"stale"`
+}
+
+func exchangeRates() (Rates, error) {
+    var r Rates
+    if found, _ := cache.Get("rates:fresh", &amp;r); found {
+        return r, nil
+    }
+    data, err := fetchRates()
+    if err != nil {
+        if found, _ := cache.Get("rates:stale", &amp;r); found {
+            r.Stale = true // show "as of FetchedAt"
+            return r, nil
+        }
+        return r, err // nothing to fall back on
+    }
+    r = Rates{Data: data, FetchedAt: time.Now()}
+    cache.Set("rates:fresh", r, lytecache.TTL(time.Minute))
+    cache.Set("rates:stale", r, lytecache.TTL(24*time.Hour))
+    return r, nil
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">function exchangeRates(LyteCache $cache): array
+{
+    $fresh = $cache-&gt;get("rates:fresh");
+    if ($fresh !== null) {
+        return $fresh;
+    }
+    try {
+        $rates = ["data" =&gt; fetchRates(), "fetched_at" =&gt; time()];
+    } catch (UpstreamException $e) {
+        $stale = $cache-&gt;get("rates:stale");
+        if ($stale === null) {
+            throw $e;                                // nothing to fall back on
+        }
+        return [...$stale, "stale" =&gt; true];         // show "as of fetched_at"
+    }
+    $cache-&gt;set("rates:fresh", $rates, ttl: 60);
+    $cache-&gt;set("rates:stale", $rates, ttl: 24 * 3600);
+    return $rates;
+}</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> Only do this for data where an old answer is better than no answer. Exchange rates on a dashboard qualify. A balance, or a price you're about to charge, does not. During an outage every request still tries the upstream first, because the fresh copy is gone. If the upstream is slow to fail, also cache the failure for a few seconds and skip the call while it's there.</p>
+               </div>
+               <div class="api-group" id="recipe-rate-limit">
+                  <h3>Rate limit</h3>
+                  <p>Count requests per client in a key named after the current time window. <code>incr</code> is atomic, so concurrent requests from many workers are all counted. When the window rolls over, the key name changes and counting starts again from zero.</p>
+                  <p><code>incr</code> creates a new counter with no TTL, so set one on the first increment. That way old windows clean themselves up.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python">def allow(client_id, limit=100, window=60):
+    bucket = int(time.time() // window)
+    key = f"rate:{client_id}:{bucket}"
+    count = cache.incr(key)
+    if count == 1:
+        cache.expire(key, window * 2)   # old windows clean themselves up
+    return count &lt;= limit</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">boolean allow(String clientId, long limit, Duration window) {
+    long bucket = Instant.now().getEpochSecond() / window.toSeconds();
+    String key = "rate:" + clientId + ":" + bucket;
+    long count = cache.incr(key);
+    if (count == 1) {
+        cache.expire(key, window.multipliedBy(2));  // old windows clean themselves up
+    }
+    return count &lt;= limit;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">function allow(clientId: string, limit = 100, windowSeconds = 60): boolean {
+  const bucket = Math.floor(Date.now() / 1000 / windowSeconds);
+  const key = `rate:${clientId}:${bucket}`;
+  const count = Number(cache.incr(key));
+  if (count === 1) {
+    cache.expire(key, windowSeconds * 2);   // old windows clean themselves up
+  }
+  return count &lt;= limit;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">func allow(clientID string, limit int64, window time.Duration) (bool, error) {
+    bucket := time.Now().Unix() / int64(window.Seconds())
+    key := fmt.Sprintf("rate:%s:%d", clientID, bucket)
+    count, err := cache.Incr(key, 1)
+    if err != nil {
+        return false, err
+    }
+    if count == 1 {
+        cache.Expire(key, 2*window) // old windows clean themselves up
+    }
+    return count &lt;= limit, nil
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">function allow(LyteCache $cache, string $clientId, int $limit = 100, int $window = 60): bool
+{
+    $bucket = intdiv(time(), $window);
+    $key = "rate:{$clientId}:{$bucket}";
+    $count = $cache-&gt;incr($key);
+    if ($count === 1) {
+        $cache-&gt;expire($key, $window * 2);   // old windows clean themselves up
+    }
+    return $count &lt;= $limit;
+}</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> This is a fixed window. A client can send <code>limit</code> requests at the end of one window and <code>limit</code> more at the start of the next, so a burst of up to twice the limit gets through. If that matters, keep the last two windows and weight them, or use a token bucket. Also, if a process dies between <code>incr</code> and <code>expire</code>, that window's key never expires. The count stays correct, because the next window uses a new key, but the old row lingers until you delete it.</p>
+               </div>
+               <div class="api-group" id="recipe-idempotency">
+                  <h3>Idempotency keys</h3>
+                  <p>A client retries a payment because its connection dropped. Did the first attempt go through? An idempotency key answers that. The client sends the same key on every retry, and your handler makes sure the work runs once per key.</p>
+                  <p><code>add()</code> is the core of it. It writes the key only if it doesn't exist, as one atomic statement, and tells you whether it won. Two workers can receive the same retry at the same moment. Exactly one gets <code>true</code> and does the work. The other sees the claim and returns the first result, or a 409 if the first attempt is still running.</p>
+                  <p>Store the outcome under the same key when you finish, so a later retry gets the original response rather than a second charge.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python">DAY = 24 * 3600
+
+def charge(request_id, amount):
+    key = f"idem:{request_id}"
+    if not cache.add(key, {"status": "processing"}, ttl=DAY):
+        previous = cache.get(key)
+        if previous and previous["status"] == "done":
+            return previous["receipt"]           # replay the first response
+        raise Conflict("still processing")       # 409: tell the client to retry later
+    try:
+        receipt = payments.charge(amount, idempotency_key=request_id)
+    except Exception:
+        cache.delete(key)                        # failed: let a retry try again
+        raise
+    cache.set(key, {"status": "done", "receipt": receipt}, ttl=DAY)
+    return receipt</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">record Claim(String status, Receipt receipt) {}
+
+Receipt charge(String requestId, long amount) {
+    String key = "idem:" + requestId;
+    if (!cache.add(key, new Claim("processing", null), Duration.ofDays(1))) {
+        Claim previous = cache.get(key, Claim.class);
+        if (previous != null &amp;&amp; previous.status().equals("done")) {
+            return previous.receipt();               // replay the first response
+        }
+        throw new ConflictException("still processing");  // 409
+    }
+    Receipt receipt;
+    try {
+        receipt = payments.charge(amount, requestId);
+    } catch (RuntimeException e) {
+        cache.delete(key);                           // failed: let a retry try again
+        throw e;
+    }
+    cache.set(key, new Claim("done", receipt), Duration.ofDays(1));
+    return receipt;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">const DAY = 24 * 3600;
+
+async function charge(requestId: string, amount: number): Promise&lt;Receipt&gt; {
+  const key = `idem:${requestId}`;
+  if (!cache.add(key, { status: "processing" }, { ttl: DAY })) {
+    const previous = cache.get&lt;{ status: string; receipt?: Receipt }&gt;(key);
+    if (previous?.status === "done") return previous.receipt!; // replay
+    throw new ConflictError("still processing");               // 409
+  }
+  let receipt: Receipt;
+  try {
+    receipt = await payments.charge(amount, { idempotencyKey: requestId });
+  } catch (err) {
+    cache.delete(key);                     // failed: let a retry try again
+    throw err;
+  }
+  cache.set(key, { status: "done", receipt }, { ttl: DAY });
+  return receipt;
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">type claim struct {
+    Status  string   `json:"status"`
+    Receipt *Receipt `json:"receipt,omitempty"`
+}
+
+func charge(requestID string, amount int64) (*Receipt, error) {
+    key := "idem:" + requestID
+    won, err := cache.Add(key, claim{Status: "processing"}, lytecache.TTL(24*time.Hour))
+    if err != nil {
+        return nil, err
+    }
+    if !won {
+        var prev claim
+        if found, _ := cache.Get(key, &amp;prev); found &amp;&amp; prev.Status == "done" {
+            return prev.Receipt, nil // replay the first response
+        }
+        return nil, ErrStillProcessing // 409
+    }
+    receipt, err := payments.Charge(amount, requestID)
+    if err != nil {
+        cache.Delete(key) // failed: let a retry try again
+        return nil, err
+    }
+    return receipt, cache.Set(key, claim{Status: "done", Receipt: receipt}, lytecache.TTL(24*time.Hour))
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">function charge(LyteCache $cache, string $requestId, int $amount): array
+{
+    $key = "idem:{$requestId}";
+    $day = 24 * 3600;
+    if (!$cache-&gt;add($key, ["status" =&gt; "processing"], ttl: $day)) {
+        $previous = $cache-&gt;get($key);
+        if (($previous["status"] ?? null) === "done") {
+            return $previous["receipt"];              // replay the first response
+        }
+        throw new ConflictException("still processing");  // 409
+    }
+    try {
+        $receipt = Payments::charge($amount, idempotencyKey: $requestId);
+    } catch (Throwable $e) {
+        $cache-&gt;delete($key);                         // failed: let a retry try again
+        throw $e;
+    }
+    $cache-&gt;set($key, ["status" =&gt; "done", "receipt" =&gt; $receipt], ttl: $day);
+    return $receipt;
+}</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> Three things to get right. First, the claim must not be evicted: an LRU eviction would let a duplicate through. We'd keep idempotency keys in their own namespace or file with eviction set to <code>noeviction</code> and no key cap. Second, the claim only stops <em>your</em> workers from starting the work twice. If a process dies after charging but before writing the result, the key stays at <code>processing</code> until it expires. That's why the examples also pass the request ID to the payment provider as its own idempotency key. Third, this only covers workers on one host. Across hosts, use a unique constraint in your database.</p>
+               </div>
+               <div class="api-group" id="recipe-lock">
+                  <h3>A cross-process lock</h3>
+                  <p>Use <code>lock()</code> when several workers on one machine share something that only one of them should touch at a time, such as a file, an external account, or a sync with another system. Each worker waits its turn.</p>
+                  <p>"Run this job once" is a different problem. If five workers all fire the nightly export at midnight, a lock makes them run it one after another, five times. To run it <em>once</em>, claim the run itself with <code>add()</code>, using a key that names the run.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python"># One worker at a time:
+with cache.lock("inventory-sync", timeout=120):
+    sync_inventory()
+
+# Once per day, however many workers fire at midnight:
+today = datetime.date.today().isoformat()
+if cache.add(f"job:nightly-export:{today}", os.getpid(), ttl=2 * 86400):
+    run_export()</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">// One worker at a time:
+try (CacheLock lock = cache.lock("inventory-sync", Duration.ofMinutes(2))) {
+    syncInventory();
+}
+
+// Once per day, however many workers fire at midnight:
+String today = LocalDate.now().toString();
+if (cache.add("job:nightly-export:" + today, ProcessHandle.current().pid(), Duration.ofDays(2))) {
+    runExport();
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">// One worker at a time:
+{
+  using lock = cache.lock("inventory-sync", { timeoutMs: 120_000 });
+  syncInventory();
+}
+
+// Once per day, however many workers fire at midnight:
+const today = new Date().toISOString().slice(0, 10);
+if (cache.add(`job:nightly-export:${today}`, process.pid, { ttl: 2 * 86400 })) {
+  runExport();
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">// One worker at a time:
+lock, err := cache.Lock("inventory-sync", 2*time.Minute)
+if err != nil {
+    return err
+}
+syncInventory()
+lock.Release()
+
+// Once per day, however many workers fire at midnight:
+today := time.Now().Format("2006-01-02")
+if won, _ := cache.Add("job:nightly-export:"+today, os.Getpid(), lytecache.TTL(48*time.Hour)); won {
+    runExport()
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">// One worker at a time:
+$cache-&gt;lock("inventory-sync", timeout: 120.0)-&gt;block(function () {
+    syncInventory();
+});
+
+// Once per day, however many workers fire at midnight:
+$today = date("Y-m-d");
+if ($cache-&gt;add("job:nightly-export:{$today}", getmypid(), ttl: 2 * 86400)) {
+    runExport();
+}</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> Both only coordinate processes that share this cache file, which means one machine. The lock's timeout is also its TTL: if the work outlasts it, the lock expires and another worker can enter. The daily claim is never released, and that's deliberate, because the date in the key is what makes it once per day. If the export fails and you want a retry to run it, delete the claim in your error handler. (Python's <code>lock()</code> also accepts <code>blocking=False</code> to give up at once instead of waiting.)</p>
+               </div>
+               <div class="api-group" id="recipe-invalidate">
+                  <h3>Invalidate on write</h3>
+                  <p>When the data behind a cache entry changes, delete the entry so the next read fetches the new value. Do it <strong>after</strong> your database transaction commits, not before and not inside it.</p>
+                  <p>Here's why the order matters. Delete first and a request that arrives before your commit misses, reads the old row from the database, and caches it again. That stale copy then stays until its TTL runs out. Delete after the commit and the next miss can only read the new row.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python">def rename_user(user_id, name):
+    with db.transaction():
+        db.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
+    cache.delete(f"user:{user_id}")   # after the commit, never inside it</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">void renameUser(long userId, String name) {
+    jdbc.inTransaction(tx -&gt; tx.update("UPDATE users SET name = ? WHERE id = ?", name, userId));
+    cache.delete("user:" + userId);   // after the commit, never inside it
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">async function renameUser(userId: number, name: string) {
+  await db.transaction(async (tx) =&gt; {
+    await tx.query("UPDATE users SET name = $1 WHERE id = $2", [name, userId]);
+  });
+  cache.delete(`user:${userId}`);    // after the commit, never inside it
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">func renameUser(ctx context.Context, userID int64, name string) error {
+    tx, err := db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+    if _, err := tx.ExecContext(ctx, "UPDATE users SET name = $1 WHERE id = $2", name, userID); err != nil {
+        return err
+    }
+    if err := tx.Commit(); err != nil {
+        return err
+    }
+    _, err = cache.Delete(fmt.Sprintf("user:%d", userID)) // after the commit
+    return err
+}</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">function renameUser(PDO $db, LyteCache $cache, int $userId, string $name): void
+{
+    $db-&gt;beginTransaction();
+    $db-&gt;prepare("UPDATE users SET name = ? WHERE id = ?")-&gt;execute([$name, $userId]);
+    $db-&gt;commit();
+    $cache-&gt;delete("user:{$userId}");   // after the commit, never inside it
+}</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> A small race remains. A reader that loaded the old row just before your commit can write it into the cache just after your delete. That's rare, but it's why cached database rows should always carry a TTL as well: it caps how long a stale copy can survive. If other processes keep their own in-memory copies, deleting the shared entry isn't enough. Tell them, as in the next recipe.</p>
+               </div>
+               <div class="api-group" id="recipe-notify">
+                  <h3>Cross-worker invalidation with notify</h3>
+                  <p>This is the case the notification feature exists for. Several workers on one machine keep derived data in memory, such as a parsed config or a memo dict. When one worker changes the source, the others need to drop their copies. Deleting the shared cache entry doesn't reach their memory. An event does.</p>
+                  <p>Publish after the commit, and run the listener on a background thread in each worker.</p>
+               <div class="snippet lang-group">
+                  <div class="snippet-head">
+                     <div class="pillrow" role="tablist" aria-label="Language">
+                        <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                        <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                        <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                        <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                        <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                     </div>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <div class="snippet-pane is-active" data-lang="python">
+                     <pre><code data-syntax="python"># the writer, after its transaction commits
+cache.delete("pricing-rules")
+cache.notify("invalidate", {"key": "pricing-rules"})
+
+# every worker, at startup
+def listen():
+    with cache.watch("invalidate") as sub:
+        for event in sub:
+            local_memo.pop(event.payload["key"], None)
+
+threading.Thread(target=listen, daemon=True).start()</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="java">
+                     <pre><code data-syntax="java">// the writer, after its transaction commits
+cache.delete("pricing-rules");
+cache.notify("invalidate", Map.of("key", "pricing-rules"));
+
+// every worker, at startup
+Thread listener = new Thread(() -&gt; {
+    try (Subscription sub = cache.watch("invalidate")) {
+        for (Event e : sub) {
+            localMemo.remove(e.payload(Map.class).get("key"));
+        }
+    }
+}, "lytecache-invalidate");
+listener.setDaemon(true);
+listener.start();</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="node">
+                     <pre><code data-syntax="typescript">// the writer, after its transaction commits
+cache.delete("pricing-rules");
+cache.notify("invalidate", { key: "pricing-rules" });
+
+// every worker, at startup
+(async () =&gt; {
+  using sub = cache.watch("invalidate");
+  for await (const event of sub) localMemo.delete(event.payload.key);
+})();</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="go">
+                     <pre><code data-syntax="go">// the writer, after its transaction commits
+cache.Delete("pricing-rules")
+cache.Notify("invalidate", map[string]any{"key": "pricing-rules"})
+
+// every worker, at startup
+go func() {
+    sub, err := cache.Watch([]string{"invalidate"})
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer sub.Close()
+    for ev := range sub.Events() {
+        var p struct{ Key string `json:"key"` }
+        if ev.Decode(&amp;p) == nil {
+            localMemo.Delete(p.Key) // a sync.Map: other goroutines read it
+        }
+    }
+}()</code></pre>
+                  </div>
+                  <div class="snippet-pane" data-lang="php">
+                     <pre><code data-syntax="php">// the writer, after its transaction commits
+$cache-&gt;delete("pricing-rules");
+$cache-&gt;notify("invalidate", ["key" =&gt; "pricing-rules"]);
+
+// a long-running worker (queue worker, Octane, Swoole). PHP has no
+// threads, so the worker polls inside this loop.
+foreach ($cache-&gt;watch("invalidate") as $event) {
+    unset($localMemo[$event-&gt;payload()["key"]]);
+}</code></pre>
+                  </div>
+               </div>
+                  <p class="caveat"><strong>Caveat.</strong> Delivery is polled, so a worker drops its copy within about 50&nbsp;ms, or up to about a second after a quiet spell. It's also at-least-once, so handlers must be safe to run twice (dropping a key twice is). It only reaches processes on this machine. A worker that starts after the event was published won't see it unless it resumes from a saved cursor, so a fresh worker should start with an empty memo. A plain PHP-FPM request starts empty anyway, so this matters for long-running PHP workers only.</p>
+               </div>
+            </section>
+            <section class="section" id="from-redis">
+               <p class="eyebrow">Guides</p>
+               <h2>Coming from Redis</h2>
+               <p class="lead">Most of what you use Redis for as a cache maps across one to one. The method names below are the Python ones. Node.js, Java and PHP use camelCase (<code>setMany</code>), and Go uses exported names (<code>SetMany</code>). Every method is on the toggle in the <a href="#api-reference">method reference</a>.</p>
+               <div class="table-wrap">
+                  <table>
+                     <thead><tr><th>Redis</th><th>lytecache</th><th>Differences</th></tr></thead>
+                     <tbody>
+                        <tr><td><code>SET</code> / <code>GET</code></td><td><code>set(key, value)</code> / <code>get(key)</code></td><td>Values keep their type: string, integer, float, bytes or JSON. A miss returns <code>None</code>, <code>null</code> or <code>undefined</code>, or the default you pass.</td></tr>
+                        <tr><td><code>SETEX</code>, <code>SET … EX/PX</code></td><td><code>set(key, value, ttl=…)</code></td><td>Seconds as a number in Python, Node.js and PHP (fractions allowed, so <code>0.5</code> is 500&nbsp;ms). A <code>Duration</code> in Java and Go.</td></tr>
+                        <tr><td><code>DEL</code></td><td><code>delete(*keys)</code></td><td>Returns how many keys existed.</td></tr>
+                        <tr><td><code>EXISTS</code></td><td><code>exists(key)</code> (<code>has</code> in PHP)</td><td>One key, returns a boolean.</td></tr>
+                        <tr><td><code>EXPIRE</code> / <code>PEXPIRE</code></td><td><code>expire(key, ttl)</code></td><td>Same units as <code>set</code>.</td></tr>
+                        <tr><td><code>TTL</code> / <code>PTTL</code></td><td><code>ttl(key)</code> (<code>TTLOf</code> in Go)</td><td>Remaining seconds as a float. <code>-1</code> means no TTL. A missing key returns <code>None</code>/<code>null</code>/<code>undefined</code> where Redis returns <code>-2</code>.</td></tr>
+                        <tr><td><code>PERSIST</code></td><td><code>persist(key)</code></td><td></td></tr>
+                        <tr><td><code>INCR</code> / <code>INCRBY</code> / <code>DECR</code> / <code>DECRBY</code></td><td><code>incr(key, n)</code> / <code>decr(key, n)</code></td><td>Keeps an existing TTL. A counter it creates has no TTL. Float increments use <code>incr_float</code> (<code>incrFloat</code>, <code>incrDouble</code> in Java).</td></tr>
+                        <tr><td><code>MSET</code> / <code>MGET</code></td><td><code>set_many(mapping)</code> / <code>get_many(keys)</code></td><td><code>set_many</code> is one transaction. <code>get_many</code> returns a map of the keys it found, not a list with gaps.</td></tr>
+                        <tr><td><code>SETNX</code>, <code>SET … NX</code></td><td><code>add(key, value, ttl)</code></td><td>Returns whether it wrote. Atomic across processes.</td></tr>
+                        <tr><td><code>SET … XX</code></td><td><code>replace(key, value, ttl)</code></td><td></td></tr>
+                        <tr><td><code>GETSET</code>, <code>SET … GET</code></td><td><code>get_set(key, value)</code></td><td>Atomic swap; returns the old value.</td></tr>
+                        <tr><td><code>KEYS</code> / <code>SCAN</code></td><td><code>keys(pattern)</code></td><td>A lazy iterator with SQLite GLOB patterns (<code>*</code>, <code>?</code>, <code>[…]</code>). No cursor or <code>COUNT</code>; just stop iterating.</td></tr>
+                        <tr><td><code>FLUSHDB</code></td><td><code>flush()</code></td><td>Clears the current namespace only. There's no <code>FLUSHALL</code>: flush each namespace, or delete the file.</td></tr>
+                        <tr><td><code>SELECT</code></td><td>the <code>namespace</code> option</td><td>A namespace is a name, not a number. A separate file isolates more strongly.</td></tr>
+                        <tr><td><code>HSET</code> / <code>HGET</code> / <code>HGETALL</code> / <code>HINCRBY</code></td><td><code>hset</code> / <code>hget</code> / <code>hgetall</code> / <code>hincrby</code></td><td>A hash is a JSON object value, so <code>get</code> returns the whole document. Field names are top-level keys only. Also <code>hsetnx</code>, <code>hset_many</code>, <code>hmget</code>, <code>hdel</code>, <code>hexists</code>, <code>hkeys</code>, <code>hvals</code>, <code>hlen</code>.</td></tr>
+                        <tr><td><code>PUBLISH</code> / <code>SUBSCRIBE</code> / <code>PSUBSCRIBE</code></td><td><code>notify(channel, payload)</code> / <code>watch(pattern)</code></td><td>One host only, polled (about 50&nbsp;ms), durable, at-least-once. A pattern is an exact name or a trailing <code>*</code>. Subscribers can resume from a saved <code>seq</code>, which Redis Pub/Sub can't.</td></tr>
+                        <tr><td><code>INFO</code></td><td><code>stats()</code></td><td>Key count and size come from the file. Hits and misses are per process.</td></tr>
+                        <tr><td><code>WATCH</code> / <code>MULTI</code> / <code>EXEC</code></td><td>no equivalent</td><td>Use an atomic method (<code>add</code>, <code>replace</code>, <code>get_set</code>, <code>incr</code>, the hash operations) or wrap the sequence in <code>lock()</code>.</td></tr>
+                     </tbody>
+                  </table>
+               </div>
+               <h3>What has no equivalent</h3>
+               <p>It's better to find this out now than on day three. If any of these is central to what you're building, keep Redis.</p>
+               <div class="table-wrap">
+                  <table>
+                     <thead><tr><th>Redis feature</th><th>What to do instead</th></tr></thead>
+                     <tbody>
+                        <tr><td>Clustering and sharding</td><td>There's one file on one machine. If one machine's cache isn't enough, use Redis or Valkey.</td></tr>
+                        <tr><td>Replication and failover</td><td>None. A cache is meant to be disposable: if the file is lost, it refills from the source. If you need a replica, you need a server.</td></tr>
+                        <tr><td>Pub/sub across machines</td><td>Events stay on one host. Use Redis, NATS or a message broker.</td></tr>
+                        <tr><td>Lua scripting, <code>EVAL</code>, functions</td><td>Use the atomic methods, or put the sequence inside <code>lock()</code>.</td></tr>
+                        <tr><td>Streams with consumer groups</td><td><code>watch</code> fans out to every subscriber and has no exclusive delivery. For work queues use a real queue (or Redis Streams, Kafka, NATS JetStream).</td></tr>
+                        <tr><td>Lists and blocking pops (<code>LPUSH</code>, <code>BRPOP</code>)</td><td>Not implemented. For a queue, use a queue. For a small list, store it as one JSON value.</td></tr>
+                        <tr><td>Sets (<code>SADD</code>, <code>SINTER</code>)</td><td>Not implemented. For a small set, use a hash with members as field names.</td></tr>
+                        <tr><td>Sorted sets</td><td>Not available yet. A database table with an index does leaderboards and time-ordered data well.</td></tr>
+                        <tr><td>Geospatial, HyperLogLog, bitmaps</td><td>Not implemented. Use PostGIS or SpatiaLite for geo; an exact count in your database usually beats an estimate at this scale.</td></tr>
+                        <tr><td>LFU eviction</td><td>Not available yet. LRU, TTL-first, random and no-eviction are.</td></tr>
+                     </tbody>
+                  </table>
+               </div>
+            </section>
+            <section class="section" id="frameworks">
+               <p class="eyebrow">Guides</p>
+               <h2>Framework integration</h2>
+               <p class="lead">Laravel has a real cache driver. The other frameworks below don't have an adapter yet, so these sections show how to wire the plain library in by hand. Each snippet is for one framework, so the language toggle doesn't apply to them.</p>
+               <h3 id="fw-spring">Spring Boot</h3>
+               <p><strong>No adapter yet.</strong> There's no Spring <code>CacheManager</code> for lytecache, so <code>@Cacheable</code> won't use it. Register one <code>LyteCache</code> as a singleton bean and inject it. One instance per application is right. It's thread-safe, and each extra instance on the same file only adds connections and another sweeper thread.</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Java</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="java">@Configuration
+public class CacheConfig {
+    @Bean(destroyMethod = "close")
+    public LyteCache lyteCache(@Value("${app.cache-path}") Path path) {
+        return LyteCache.builder().path(path).namespace("orders").build();
+    }
+}
+
+@Service
+public class RatesService {
+    private final LyteCache cache;
+    private final RatesClient client;
+
+    public RatesService(LyteCache cache, RatesClient client) {
+        this.cache = cache;
+        this.client = client;
+    }
+
+    public Rates rates(String base) {
+        return cache.memoize("rates:" + base, Duration.ofMinutes(5), () -&gt; client.fetch(base));
+    }
+}</code></pre>
+               </div>
+               <p><code>destroyMethod = "close"</code> stops the sweeper and flushes buffered state when the context shuts down. Set <code>app.cache-path</code> to a directory on a volume in production; see <a href="#troubleshooting">Troubleshooting</a> for what happens if you don't.</p>
+               <h3 id="fw-django">Django</h3>
+               <p><strong>No adapter yet.</strong> There's no <code>CACHES</code> backend, so Django's own cache framework won't use lytecache. Create the cache in a module and import it where you need it.</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Python</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="python"># myproject/cache.py
+from django.conf import settings
+from lytecache import LyteCache
+
+cache = LyteCache(settings.BASE_DIR / "var" / "cache.db", namespace="myproject")
+
+
+# anywhere
+from myproject.cache import cache
+
+def product_view(request, pk):
+    product = cache.get(f"product:{pk}")
+    if product is None:
+        product = serialize(Product.objects.get(pk=pk))
+        cache.set(f"product:{pk}", product, ttl=600)
+    return JsonResponse(product)</code></pre>
+               </div>
+               <p>Create the cache in each worker, not before Gunicorn forks. The library opens its SQLite connection when you construct it and doesn't detect a <code>fork()</code>, so a cache built in the master process under <code>--preload</code> would hand every worker a copy of the same connection. Without <code>--preload</code>, each worker imports the module itself and gets its own.</p>
+               <h3 id="fw-flask">Flask</h3>
+               <p><strong>No adapter yet.</strong> Attach one cache to the app and close it at exit.</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Python</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="python">import atexit
+from flask import Flask, current_app
+from lytecache import LyteCache
+
+def create_app():
+    app = Flask(__name__)
+    app.extensions["lytecache"] = cache = LyteCache(app.instance_path + "/cache.db")
+    atexit.register(cache.close)
+
+    @app.get("/rates/&lt;base&gt;")
+    def rates(base):
+        cache = current_app.extensions["lytecache"]
+        return cache.get(f"rates:{base}") or refresh_rates(base)
+
+    return app</code></pre>
+               </div>
+               <p>The same fork rule applies as for Django: build the cache inside <code>create_app()</code> in each worker, not at import time in a preloaded master.</p>
+               <h3 id="fw-express">Express</h3>
+               <p><strong>No adapter yet.</strong> Export one cache from a module, use it in routes or middleware, and close it on shutdown.</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">TypeScript</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="typescript">// cache.ts
+import { LyteCache } from "lytecache";
+export const cache = new LyteCache({ path: process.env.LYTECACHE_PATH ?? "./var/cache.db" });
+
+// app.ts
+import express from "express";
+import { cache } from "./cache.js";
+
+const app = express();
+
+app.get("/rates/:base", async (req, res) =&gt; {
+  const rates = await cache.memoizeAsync(`rates:${req.params.base}`, 300,
+    () =&gt; fetchRates(req.params.base));
+  res.json(rates);
+});
+
+const server = app.listen(3000);
+process.on("SIGTERM", () =&gt; server.close(() =&gt; cache.close()));</code></pre>
+               </div>
+               <p>Under the cluster module or PM2, each worker process opens its own handle to the same file. That's the intended setup, and they all see each other's writes.</p>
+               <h3 id="fw-laravel">Laravel</h3>
+               <p><strong>A real driver ships with the PHP package.</strong> The service provider is auto-discovered, so installing the package and setting one environment variable is the whole setup. <code>Cache::remember()</code>, <code>Cache::lock()</code> and the rest of the facade then use lytecache.</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">composer require lytecache/lytecache
+echo "CACHE_STORE=lytecache" &gt;&gt; .env</code></pre>
+               </div>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">PHP</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="php">use Illuminate\Support\Facades\Cache;
+
+$user = Cache::remember("user:42", 300, fn () =&gt; User::find(42));
+
+Cache::lock("import:products", 60)-&gt;block(30, function () {
+    // one worker at a time, across every PHP-FPM process on this host
+});</code></pre>
+               </div>
+               <p>The file defaults to <code>storage_path('framework/cache/lytecache.db')</code>. To change it, or set a namespace, cap or eviction policy, publish the config with <code>php artisan vendor:publish --tag=lytecache-config</code>. PHP has no background thread, so schedule the maintenance command to keep a quiet cache swept:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">PHP</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="php">// routes/console.php
+Schedule::command("lytecache:maintain")-&gt;everyMinute();</code></pre>
+               </div>
+            </section>
+            <section class="section" id="troubleshooting">
+               <p class="eyebrow">Guides</p>
+               <h2>Troubleshooting</h2>
+               <p class="lead">Find the symptom you're seeing. Each entry gives one way to confirm the cause, then the fix.</p>
+               <div class="callout good">
+                  <p class="eyebrow">The habit that prevents most of these</p>
+                  <p>Log the exact key at the place you write it and at the place you read it, and compare the two. Most "the cache doesn't work" reports turn out to be two different keys.</p>
+               </div>
+               <h3 id="ts-key-vanishes">“My key is there when I write it and gone when I read it.”</h3>
+               <p>Work down this list in order. The first check finds the problem most of the time.</p>
+               <ol>
+                  <li><strong>Compare the key strings character by character.</strong> Print them with quotes around them, at both sites. The usual culprit is something interpolated into the key: <code>user:None</code> or <code>user:undefined</code> because an ID wasn't loaded yet, <code>42</code> at one site and <code>"42 "</code> at the other, or a UUID in upper case in one place and lower case in another.</li>
+                  <li><strong>Check the TTL right after the write.</strong> If <code>ttl(key)</code> prints <code>0.3</code> when you meant five minutes, the key really did expire. See the units entry at the end of this section.</li>
+                  <li><strong>Check <code>exists(key)</code> at the read site.</strong> If it's false while the writer's own check is true, the two sites aren't looking at the same file or namespace. The next entry covers that.</li>
+               </ol>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Python</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="python">print(repr(key), cache.ttl(key))       # at the write site, straight after set()
+print(repr(key), cache.exists(key))    # at the read site</code></pre>
+               </div>
+               <h3 id="ts-namespace">“<code>stats</code> shows zero keys, but my app is definitely caching.”</h3>
+               <p>Almost always a namespace mismatch. Your app opened the cache with a namespace, and the CLI looks in <code>default</code> unless you tell it otherwise. Both are reading the right file, just different partitions of it. Nothing errors. The CLI just sees an empty namespace, which makes this the most confusing failure in the product.</p>
+               <p>Look at how your app opens the cache, then pass the same namespace to the CLI:</p>
+               <div class="table-wrap">
+                  <table>
+                     <thead><tr><th>In your app</th><th>On the command line</th></tr></thead>
+                     <tbody>
+                        <tr><td><code>LyteCache(namespace="sessions")</code></td><td rowspan="5"><code>lytecache --namespace sessions stats</code></td></tr>
+                        <tr><td><code>.namespace("sessions")</code> (Java)</td></tr>
+                        <tr><td><code>new LyteCache({ namespace: "sessions" })</code></td></tr>
+                        <tr><td><code>lytecache.WithNamespace("sessions")</code></td></tr>
+                        <tr><td><code>new LyteCache(namespace: "sessions")</code></td></tr>
+                     </tbody>
+                  </table>
+               </div>
+               <p>To see every namespace in a file and how many keys each holds, open it in the <a href="#ui">Admin UI</a>, whose sidebar lists them with counts. Or ask SQLite directly:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">sqlite3 "$(lytecache which | head -1)" "SELECT namespace, COUNT(*) FROM cache GROUP BY namespace"</code></pre>
+               </div>
+               <p>Two more things that look like this problem but aren't. A <code>LYTECACHE_NAMESPACE</code> environment variable does nothing, because no implementation reads one; set the namespace in code. And the <code>hits</code> and <code>misses</code> lines in <code>lytecache stats</code> always read 0. They count the CLI's own reads, not your app's. The line that tells you whether you're looking at the right namespace is <code>keys</code>.</p>
+               <h3 id="ts-empty-after-deploy">“The cache is empty after every deploy or restart.”</h3>
+               <p>The file is living in the container's writable layer, which is thrown away whenever the container is recreated. Confirm it by looking for a volume at the cache path: if <code>docker inspect</code> shows nothing mounted there, that's the cause.</p>
+               <p>Mount a named volume on the cache <em>directory</em> and point <code>LYTECACHE_PATH</code> into it:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">docker-compose.yml</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="yaml">services:
+  app:
+    environment:
+      LYTECACHE_PATH: /var/cache/lytecache/app.db
+    volumes:
+      - lytecache-data:/var/cache/lytecache
+
+volumes:
+  lytecache-data:</code></pre>
+               </div>
+               <p>Mount the directory, not the <code>.db</code> file, because SQLite creates <code>app.db-wal</code> and <code>app.db-shm</code> next to it.</p>
+               <h3 id="ts-cantopen">“<code>SQLITE_CANTOPEN</code> / unable to open database file”</h3>
+               <p>The cache directory doesn't exist, or it exists but is owned by root while your app runs as a non-root user. Confirm it from inside the container with <code>ls -ld /var/cache/lytecache</code> and <code>id</code>.</p>
+               <p>Create the directory and hand it to your app's user in the Dockerfile, <strong>before</strong> the <code>USER</code> line:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Dockerfile</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">RUN mkdir -p /var/cache/lytecache &amp;&amp; chown app:app /var/cache/lytecache
+USER app</code></pre>
+               </div>
+               <p>When Docker mounts an empty named volume for the first time, it copies that directory's ownership from the image. So getting it right in the image fixes the volume too. A volume that was already created with root ownership keeps it, though. Fix that one with a one-off <code>chown</code>, or remove the volume and let it be recreated.</p>
+               <h3 id="ts-compose-project">“The CLI says the database file doesn't exist, and Docker logs <code>Volume … Created</code>.”</h3>
+               <p>You're running the CLI in a different Compose project from your app. Compose names volumes after the project (<code>myapp_lytecache-data</code>), and it takes the project name from the directory you run it in unless something sets it explicitly. Run the CLI service from another directory and Compose looks for <code>otherdir_lytecache-data</code>, doesn't find it, and creates a new, empty one.</p>
+               <p><strong>Compose creating a volume or network when you only meant to run the CLI is the tell.</strong> It means you're not in the app's project. Check which projects exist and run the CLI in the right one:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">docker compose ls                                     # the real project names
+docker compose -p myapp run --rm lytecache-cli stats  # run inside the app's project
+docker volume rm otherdir_lytecache-data               # tidy up the stray volume</code></pre>
+               </div>
+               <h3 id="ts-ui-empty">“The Admin UI starts, but the dashboard is empty.”</h3>
+               <p>The UI container mounts a different volume from the one your app writes to. The container starts fine either way, so nothing tells you. Compare the mounts of the two containers:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Terminal</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="bash">docker inspect myapp-app-1 --format '{{range .Mounts}}{{.Name}} -&gt; {{.Destination}}{{println}}{{end}}'
+docker inspect myapp-lytecache-ui-1 --format '{{range .Mounts}}{{.Name}} -&gt; {{.Destination}}{{println}}{{end}}'</code></pre>
+               </div>
+               <p>The volume names must match. If they don't, mount the app's volume in the UI service. <a href="#ui-multi-service">Multiple app services, one Admin UI</a> covers setups with several services.</p>
+               <h3 id="ts-lost-writes">“Writes seem to be getting lost under load.”</h3>
+               <p>SQLite allows one writer at a time. A process that finds the file locked waits up to five seconds (<code>busy_timeout=5000</code>) for its turn. If it still can't write, it gets a "database is locked" error. It doesn't silently drop the write. So a lost write means either an error that something swallowed, or a bug.</p>
+               <p>Look for a <code>try</code> or <code>catch</code> around cache writes that discards the error. While you investigate, turn on <code>strict</code> mode too: by default a failing <em>read</em> is logged and returned as a miss, which can look like a write that never happened. Read-modify-write code (<code>get</code>, change, <code>set</code>) loses updates whenever two writers overlap. Use <code>incr</code>, the hash operations or <code>lock()</code> instead.</p>
+               <p>If you've ruled those out, please <a href="https://github.com/lytecache/lytecache/issues" target="_blank" rel="noopener">open an issue</a> and include the library and version (<code>pip show lytecache</code>, <code>npm ls lytecache</code>, the Maven/Composer version or the Go module version), the SQLite version, how many processes write concurrently, and whether the file sits on a network filesystem. NFS and Kubernetes <code>ReadWriteMany</code> volumes aren't supported, because SQLite's locking doesn't work reliably on them.</p>
+               <h3 id="ts-ttl-units">“My keys expire sooner or later than I expected.”</h3>
+               <p>In Python, Node.js and PHP, <code>ttl</code> is in <strong>seconds</strong>. Passing milliseconds out of habit, like <code>ttl=5000</code>, gives you 83 minutes instead of 5 seconds. Going the other way, <code>ttl=0.3</code> is 300 milliseconds. Java and Go take a typed duration, so they can't get this wrong.</p>
+               <p>Check what you actually stored straight after the write:</p>
+               <div class="snippet">
+                  <div class="snippet-head">
+                     <span class="install-label">Python</span>
+                     <button class="copy-btn" data-copy>Copy</button>
+                  </div>
+                  <pre><code data-syntax="python">cache.set("otp:42", code, ttl=5000)
+cache.ttl("otp:42")    # 4999.9 -&gt; you meant ttl=5</code></pre>
+               </div>
+               <p>If the TTL is right but the row is still in the file after it expired, that's the sweep interval. Reads already treat it as gone; see <a href="#ttl">Lazy and active expiration</a>.</p>
             </section>
             <section class="section" id="ttl">
-               <p class="eyebrow">Guide</p>
+               <p class="eyebrow">Guides</p>
                <h2>TTL &amp; expiration</h2>
-               <p class="lead">Expiration applies identically to every value type — strings, numbers, dataclasses, dicts, POJOs, records. There's nothing special about storing an object.</p>
+               <p class="lead">TTLs work the same way for every value type: strings, numbers, dataclasses, dicts, POJOs, records. Storing an object changes nothing.</p>
                <div class="callout">
                   <p class="eyebrow">Watch the units</p>
-                  <p><strong>Python's, Node.js's, and PHP's <code>ttl</code> are all plain numbers, in seconds</strong> (a <code>float</code> in Python and PHP, a <code>number</code> in Node). <code>ttl=5000</code> / <code>{ ttl: 5000 }</code> means "expire in 5000 seconds" (~83 minutes), not 5 seconds — the most common reason a key seems to "never expire." <strong>Java's and Go's are explicit</strong> (a Java <code>Duration</code>, a Go <code>time.Duration</code>), so there's no unit ambiguity there.</p>
+                  <p><strong>Python's, Node.js's, and PHP's <code>ttl</code> are all plain numbers, in seconds</strong> (a <code>float</code> in Python and PHP, a <code>number</code> in Node). <code>ttl=5000</code> / <code>{ ttl: 5000 }</code> means "expire in 5000 seconds" (~83 minutes), not 5 seconds. That's the most common reason a key seems to "never expire." <strong>Java's and Go's are explicit</strong> (a Java <code>Duration</code>, a Go <code>time.Duration</code>), so there's no unit ambiguity there.</p>
                </div>
                <div class="snippet lang-group">
                   <div class="snippet-head">
@@ -747,15 +1939,15 @@ $cache->touch("session", 300);   // sliding expiration: refresh back to 300s</co
                   </div>
                </div>
                <h3>Lazy and active expiration</h3>
-               <p>Expiration is enforced two ways, in every implementation:</p>
+               <p>Every implementation expires keys in two ways:</p>
                <ul>
-                  <li><strong>Lazily</strong>, on every read (<code>get</code> / <code>exists</code> / <code>getAll</code> / <code>getMany</code> / <code>TTLOf</code>): an expired row is treated as a miss and deleted on the spot, even with the background sweeper disabled.</li>
-                  <li><strong>Actively</strong>, by a background sweeper (a thread in Python/Java, a <code>setInterval</code> timer in Node.js, a goroutine in Go) that runs every <code>sweep_interval</code> / <code>sweepInterval</code> / <code>WithSweepInterval</code> (default 60s) and deletes expired rows in batches, so disk isn't held by dead keys even if nothing ever reads them again. PHP has no background threads, so instead it runs bounded maintenance passes opportunistically (roughly every 100 operations, throttled by <code>sweepInterval</code>) — Laravel apps should also schedule the <code>lytecache:maintain</code> artisan command so a quiet cache still gets swept.</li>
+                  <li><strong>Lazily</strong>, on every read (<code>get</code> / <code>exists</code> / <code>getAll</code> / <code>getMany</code> / <code>TTLOf</code>): the read treats an expired row as a miss and deletes it on the spot, even with the background sweeper disabled.</li>
+                  <li><strong>Actively</strong>, by a background sweeper (a thread in Python/Java, a <code>setInterval</code> timer in Node.js, a goroutine in Go) that runs every <code>sweep_interval</code> / <code>sweepInterval</code> / <code>WithSweepInterval</code> (default 60s). It deletes expired rows in batches, so dead keys don't hold disk space even if nothing reads them again. PHP has no background threads. Instead it runs short maintenance passes opportunistically (roughly every 100 operations, throttled by <code>sweepInterval</code>). In a Laravel app, also schedule the <code>lytecache:maintain</code> artisan command so a quiet cache still gets swept.</li>
                </ul>
-               <p>If you inspect the <code>.db</code> file directly (a SQLite browser, say) moments after a key expires but before the next sweep tick, the row may still be physically present — that's expected. <code>get()</code>/<code>exists()</code> already treat it as gone. Lower the sweep interval, or call <code>vacuum()</code>, if you need the file to shrink sooner.</p>
+               <p>Open the file in a SQLite browser right after a key expires and you may still see the row. The sweeper hasn't reached it yet. <code>get()</code> and <code>exists()</code> already treat it as gone. To remove expired rows right away, lower the sweep interval or run <code>lytecache maintain</code> (<code>Maintain()</code> in Go, <code>maintain()</code> in PHP). To shrink the file afterwards, call <code>vacuum()</code>.</p>
             </section>
             <section class="section" id="flush-delete">
-               <p class="eyebrow">Guide</p>
+               <p class="eyebrow">Guides</p>
                <h2>Flush &amp; delete</h2>
                <div class="snippet lang-group">
                   <div class="snippet-head">
@@ -789,7 +1981,7 @@ cache.Flush()                  // delete EVERYTHING in the current namespace</co
 $cache->flush();                  // delete EVERYTHING in the current namespace</code></pre>
                   </div>
                </div>
-               <p><code>flush()</code> takes no key or pattern argument by design — it always clears the entire namespace (the default namespace, unless you configured a different one). To clear a subset, delete by key or by pattern instead:</p>
+               <p><code>flush()</code> always clears the whole namespace: <code>default</code>, unless you configured another. It takes no key or pattern. To clear part of a namespace, delete by key or by pattern:</p>
                <div class="snippet lang-group">
                   <div class="snippet-head">
                      <div class="pillrow" role="tablist" aria-label="Language">
@@ -803,7 +1995,7 @@ $cache->flush();                  // delete EVERYTHING in the current namespace<
                   </div>
                   <div class="snippet-pane is-active" data-lang="python">
                      <pre><code data-syntax="python">for key in list(cache.keys("session:*")):
-cache.delete(key)</code></pre>
+    cache.delete(key)</code></pre>
                   </div>
                   <div class="snippet-pane" data-lang="java">
                      <pre><code data-syntax="java">cache.keys("session:*").forEach(cache::delete);</code></pre>
@@ -824,37 +2016,11 @@ cache.delete(key)</code></pre>
                </div>
                <div class="callout">
                   <p class="eyebrow">Namespaces</p>
-                  <p>If two <code>LyteCache</code> instances point at the <strong>same file but different namespaces</strong>, they're fully isolated — <code>flush()</code> on one never touches the other's keys. That's the usual reason <code>flush()</code> looks like it "didn't delete everything": check you're flushing the same namespace you wrote to.</p>
-               </div>
-            </section>
-            <section class="section" id="when-to-use">
-               <p class="eyebrow">Overview</p>
-               <h2>When to use lytecache</h2>
-               <div class="fit-grid">
-                  <div class="fit-col">
-                     <h3><span class="fit-mark yes">✓</span> Good fit</h3>
-                     <ul>
-                        <li>Single-node apps (or single-machine, multi-process apps) that want caching, counters, or TTLs with zero infrastructure</li>
-                        <li>Scripts, CLIs, notebooks, small web services, background jobs, test fixtures</li>
-                        <li>A cache that survives process restarts without a separate daemon</li>
-                        <li>Multi-process coordination via the process-safe distributed lock</li>
-                        <li>Mixed-language systems — Python, Java, Node.js, Go, and PHP processes can all share one cache file</li>
-                        <li>Laravel apps that want <code>Cache::remember()</code> and <code>Cache::lock()</code> with zero infrastructure — swap in the driver by changing one config line</li>
-                     </ul>
-                  </div>
-                  <div class="fit-col">
-                     <h3><span class="fit-mark no">✕</span> Not a good fit</h3>
-                     <ul>
-                        <li>A cache shared live across multiple servers/hosts — SQLite is a local file, not a network service. Use Redis/Memcached.</li>
-                        <li>Heavy concurrent write throughput from many processes — SQLite's single-writer model will serialize writes and become a bottleneck</li>
-                        <li>Pub/sub, streams, or other Redis data structures beyond key-value + counters</li>
-                        <li>Complex queries over cached data — use a real database</li>
-                     </ul>
-                  </div>
+                  <p>Two <code>LyteCache</code> instances on the <strong>same file but different namespaces</strong> are fully isolated. <code>flush()</code> on one never touches the other's keys. That's the usual reason <code>flush()</code> seems not to delete everything: you're flushing a different namespace from the one you wrote to.</p>
                </div>
             </section>
             <section class="section" id="configuration">
-               <p class="eyebrow">Guide</p>
+               <p class="eyebrow">Reference</p>
                <h2>Configuration</h2>
                <p class="lead">Every option has a sane default; nothing here is required to get started.</p>
                <div class="snippet lang-group">
@@ -884,14 +2050,14 @@ cache.delete(key)</code></pre>
                   </div>
                   <div class="snippet-pane" data-lang="java">
                      <pre><code data-syntax="java">LyteCache cache = LyteCache.builder()
-.path(Path.of("/data/my-cache.db"))    // optional; platform cache dir if omitted
-.namespace("sessions")                  // isolate multiple caches in one file
-.maxKeys(100_000)                       // evict when exceeded (default: 1M)
-.maxBytes(256L * 1024 * 1024)           // evict when exceeded (default: 1 GB)
-.eviction(Eviction.LRU)                 // LRU (default), TTL, RANDOM, NOEVICTION
-.sweepInterval(Duration.ofSeconds(60))  // background cleanup frequency
-.strict(false)                          // on read error: log+miss, or throw
-.build();</code></pre>
+    .path(Path.of("/data/my-cache.db"))    // optional; platform cache dir if omitted
+    .namespace("sessions")                  // isolate multiple caches in one file
+    .maxKeys(100_000)                       // evict when exceeded (default: 1M)
+    .maxBytes(256L * 1024 * 1024)           // evict when exceeded (default: 1 GB)
+    .eviction(Eviction.LRU)                 // LRU (default), TTL, RANDOM, NOEVICTION
+    .sweepInterval(Duration.ofSeconds(60))  // background cleanup frequency
+    .strict(false)                          // on read error: log+miss, or throw
+    .build();</code></pre>
                   </div>
                   <div class="snippet-pane" data-lang="node">
                      <pre><code data-syntax="typescript">new LyteCache({
@@ -930,16 +2096,17 @@ cache.delete(key)</code></pre>
 );</code></pre>
                   </div>
                </div>
-               <p><strong>Eviction policies:</strong> <code>lru</code> (default, evicts least-recently-used), <code>ttl</code> (soonest-to-expire first), <code>random</code>, and <code>noeviction</code> (rejects the write instead of evicting). <abbr title="Least Frequently Used">LFU</abbr> is a documented TODO in every implementation. Unfamiliar with an abbreviation like <abbr title="Least Recently Used">LRU</abbr>? See the <a href="#glossary">glossary</a>.</p>
+               <p><strong>Eviction policies:</strong> <code>lru</code> (default, evicts least-recently-used), <code>ttl</code> (soonest-to-expire first), <code>random</code>, and <code>noeviction</code> (rejects the write instead of evicting). <abbr title="Least Frequently Used">LFU</abbr> is not available yet in any implementation. The <a href="#glossary">glossary</a> expands <abbr title="Least Recently Used">LRU</abbr> and the other abbreviations.</p>
+               <p>One default differs between languages. Java caps a cache at 1,000,000 keys and 1&nbsp;GB unless you say otherwise. The other four languages have no cap until you set <code>max_keys</code> or <code>max_bytes</code>.</p>
                <div class="callout">
                   <p class="eyebrow">Laravel</p>
-                  <p>None of this is required to use lytecache from Laravel — set <code>CACHE_STORE=lytecache</code> and go. The options above are still there if you need them, in <code>config/cache.php</code>'s <code>stores.lytecache</code> (publish the stub with <code>php artisan vendor:publish --tag=lytecache-config</code>), and <code>path</code> defaults to <code>storage_path('framework/cache/lytecache.db')</code> instead of the platform cache directory.</p>
+                  <p>You don't need any of this to use lytecache from Laravel. Set <code>CACHE_STORE=lytecache</code> and you're done. The options above are still available, under <code>stores.lytecache</code> in <code>config/cache.php</code>. Publish the stub with <code>php artisan vendor:publish --tag=lytecache-config</code>. There, <code>path</code> defaults to <code>storage_path('framework/cache/lytecache.db')</code> rather than the platform cache directory.</p>
                </div>
             </section>
             <section class="section" id="api-reference">
-               <p class="eyebrow">API reference</p>
+               <p class="eyebrow">Reference</p>
                <h2>Method reference</h2>
-               <p class="lead">Grouped by what you're trying to do. Every group below shows all five languages side by side — flip the toggle once and it stays flipped for the rest of the page.</p>
+               <p class="lead">Grouped by what you're trying to do. Every group shows all five languages. Pick one on the toggle and the whole page follows.</p>
                <div class="api-group" id="api-set-get">
                   <h3>Set &amp; get</h3>
                   <div class="snippet lang-group">
@@ -1001,7 +2168,7 @@ $cache->has("key");</code></pre>
                </div>
                <div class="api-group" id="api-objects">
                   <h3>Objects &amp; generics</h3>
-                  <p>Anything JSON can represent — dicts, lists, dataclasses, POJOs (a plain object with no special base class or annotations — see <a href="#glossary">glossary</a>), records — round-trips as portable JSON, readable from any of the languages.</p>
+                  <p>Anything JSON can represent round-trips as portable JSON that every language can read: dicts, lists, dataclasses, records, and POJOs (plain Java objects; see the <a href="#glossary">glossary</a>).</p>
                   <div class="snippet lang-group">
                      <div class="snippet-head">
                         <div class="pillrow" role="tablist" aria-label="Language">
@@ -1149,7 +2316,7 @@ $cache->getMany(["a", "b", "missing"]);                // ["a" => "1", "b" => "2
                </div>
                <div class="api-group" id="api-counters">
                   <h3>Atomic counters</h3>
-                  <p>A single SQL <code>UPSERT</code> (an insert-or-update statement -- see <a href="#glossary">glossary</a>) per call — correct under concurrent access from many threads or processes, never a read-modify-write race.</p>
+                  <p>Each call is one SQL <code>UPSERT</code>, a statement that inserts the row or updates it in place (see the <a href="#glossary">glossary</a>). So counters stay correct when many threads or processes increment at once: there's no gap between reading and writing for another writer to slip into. <code>incr</code> keeps a key's existing TTL. A counter it creates has no TTL, and one whose TTL has passed starts again from zero with no TTL.</p>
                   <div class="snippet lang-group">
                      <div class="snippet-head">
                         <div class="pillrow" role="tablist" aria-label="Language">
@@ -1208,13 +2375,12 @@ $cache->incrFloat("ratio", 0.5);</code></pre>
                         <button class="copy-btn" data-copy>Copy</button>
                      </div>
                      <div class="snippet-pane is-active" data-lang="python">
-                        <pre><code data-syntax="python">for key in cache.keys("session:*"):   # lazy iterator, glob syntax
-print(key)
-</code></pre>
+                        <pre><code data-syntax="python">for key in cache.keys("session:*"):   # lazy iterator, GLOB syntax
+    print(key)</code></pre>
                      </div>
                      <div class="snippet-pane" data-lang="java">
                         <pre><code data-syntax="java">cache.keys("session:*")                // lazy Stream&lt;String&gt;, GLOB syntax
-.forEach(System.out::println);</code></pre>
+    .forEach(System.out::println);</code></pre>
                      </div>
                      <div class="snippet-pane" data-lang="node">
                         <pre><code data-syntax="typescript">for (const key of cache.keys("session:*")) {  // lazy generator, GLOB syntax
@@ -1284,10 +2450,11 @@ $cache->vacuum();   // reclaim disk space
 $cache->close();    // shut down cleanly (idempotent; __destruct() also calls it)</code></pre>
                      </div>
                   </div>
+                  <p>One unit differs: Java's <code>hitRate()</code> is a percentage from 0 to 100, while the other languages return a fraction from 0 to 1.</p>
                </div>
                <div class="api-group" id="api-locks">
                   <h3>Distributed locks</h3>
-                  <p>Process-safe: built on the same atomic <code>add()</code> semantics as everything else, so only one holder — across threads <em>and</em> processes — can hold a given lock name at once.</p>
+                  <p>Locks are built on the same atomic <code>add()</code> as everything else, so only one holder can have a given lock name at a time, across threads <em>and</em> processes on this host. The timeout does two jobs. It's how long <code>lock()</code> waits to acquire, and it's the lock's own TTL, so a holder that crashes can't wedge the lock forever. Pick a timeout longer than the work takes: if the work runs past it, the lock expires and another worker can take it.</p>
                   <div class="snippet lang-group">
                      <div class="snippet-head">
                         <div class="pillrow" role="tablist" aria-label="Language">
@@ -1301,7 +2468,7 @@ $cache->close();    // shut down cleanly (idempotent; __destruct() also calls it
                      </div>
                      <div class="snippet-pane is-active" data-lang="python">
                         <pre><code data-syntax="python">with cache.lock("resource", timeout=30):
-do_critical_work()</code></pre>
+    do_critical_work()</code></pre>
                      </div>
                      <div class="snippet-pane" data-lang="java">
                         <pre><code data-syntax="java">try (CacheLock lock = cache.lock("resource", Duration.ofSeconds(30))) {
@@ -1345,7 +2512,7 @@ def expensive(x):
                      </div>
                      <div class="snippet-pane" data-lang="java">
                         <pre><code data-syntax="java">String result = cache.memoize("expensive:" + x, Duration.ofHours(1),
-() -> compute(x));</code></pre>
+    () -> compute(x));</code></pre>
                      </div>
                      <div class="snippet-pane" data-lang="node">
                         <pre><code data-syntax="typescript">const result = cache.memoize(`expensive:${x}`, 3600, () => compute(x));</code></pre>
@@ -1359,11 +2526,319 @@ def expensive(x):
                      </div>
                   </div>
                </div>
+               <div class="api-group" id="api-hashes">
+                  <h3>Hashes (JSON fields)</h3>
+                  <p>Read and change single fields of a stored JSON object, the way Redis <code>HSET</code> does. Each write is computed inside SQLite from the row's <em>current</em> value. Two workers can update different fields of one key, or increment the same field, and neither loses the other's change, whether they're threads or separate processes. The obvious <code>get()</code>, modify, <code>set()</code> sequence silently loses updates.</p>
+                  <div class="snippet lang-group">
+                     <div class="snippet-head">
+                        <div class="pillrow" role="tablist" aria-label="Language">
+                           <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                           <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                           <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                           <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                           <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                        </div>
+                        <button class="copy-btn" data-copy>Copy</button>
+                     </div>
+                     <div class="snippet-pane is-active" data-lang="python">
+                        <pre><code data-syntax="python">cache.hset("user:101", "status", "active")   # True: the field was new
+cache.hset("user:101", "status", "paused")   # False: it replaced a value
+cache.hincrby("user:101", "logins")          # 1 -- an atomic counter inside the document
+cache.hget("user:101", "status")             # "paused"
+cache.hmget("user:101", ["status", "plan"])  # ["paused", None]
+cache.hgetall("user:101")                    # {"status": "paused", "logins": 1}
+cache.hdel("user:101", "plan")               # 0 -- it wasn't there
+cache.get("user:101")                        # the whole document: a hash is just JSON</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="java">
+                        <pre><code data-syntax="java">cache.hset("user:101", "status", "active");             // true: the field was new
+cache.hset("user:101", "status", "paused");             // false: it replaced a value
+cache.hincrBy("user:101", "logins", 1);                 // 1 -- an atomic counter inside the document
+String status = cache.hgetString("user:101", "status"); // "paused"
+List&lt;Object&gt; some = cache.hmget("user:101", List.of("status", "plan")); // ["paused", null]
+Map&lt;String, Object&gt; all = cache.hgetAll("user:101");    // {status=paused, logins=1}
+cache.hdel("user:101", "plan");                         // 0 -- it wasn't there</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="node">
+                        <pre><code data-syntax="typescript">cache.hset("user:101", "status", "active");   // true: the field was new
+cache.hset("user:101", "status", "paused");   // false: it replaced a value
+cache.hincrby("user:101", "logins");          // 1 -- an atomic counter inside the document
+cache.hget("user:101", "status");             // "paused"
+cache.hmget("user:101", ["status", "plan"]);  // ["paused", undefined]
+cache.hgetAll("user:101");                    // { status: "paused", logins: 1 }
+cache.hdel("user:101", "plan");               // 0 -- it wasn't there</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="go">
+                        <pre><code data-syntax="go">created, err := cache.HSet("user:101", "status", "active") // true: the field was new
+logins, err := cache.HIncrBy("user:101", "logins", 1)      // 1 -- an atomic counter inside the document
+status, found, err := cache.HGetString("user:101", "status")
+
+var plan Plan
+found, err = cache.HGet("user:101", "plan", &amp;plan)          // decode one field into any type
+vals, err := cache.HMGet("user:101", []string{"status", "plan"}) // []json.RawMessage, nil if missing
+all, err := cache.HGetAll("user:101")                       // map[string]json.RawMessage
+n, err := cache.HDel("user:101", "plan")</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="php">
+                        <pre><code data-syntax="php">$cache-&gt;hset("user:101", "status", "active");   // true: the field was new
+$cache-&gt;hset("user:101", "status", "paused");   // false: it replaced a value
+$cache-&gt;hincrBy("user:101", "logins");          // 1 -- an atomic counter inside the document
+$cache-&gt;hget("user:101", "status");             // "paused"
+$cache-&gt;hmget("user:101", ["status", "plan"]);  // ["paused", null]
+$cache-&gt;hgetAll("user:101");                    // ["status" =&gt; "paused", "logins" =&gt; 1]
+$cache-&gt;hdel("user:101", "plan");               // 0 -- it wasn't there</code></pre>
+                     </div>
+                  </div>
+                  <p>A hash isn't a separate type. Anything stored with <code>set(key, &#123;...&#125;)</code> works with <code>hget</code>, and <code>get</code> returns the whole document. A field write on a missing key creates it with <strong>no expiry</strong>, unless you pass a TTL, and that TTL only applies on creation. A field write never changes an existing TTL and never revives an expired key. Field names are literal top-level keys: <code>"a.b"</code> is one field, not a path. A hash operation on a value that isn't a JSON object raises the library's serialization error and leaves the value alone. <code>stats()</code> reports which mode hashes run in (<code>hash_mode</code> / <code>hashMode</code> / <code>HashMode</code>). Normally it's <code>json1</code>. On an old system SQLite, which you'll mostly meet with PHP, it's <code>fallback</code>: hashes stay correct but hold the write lock longer.</p>
+               </div>
+               <div class="api-group" id="api-events">
+                  <h3>Local events (notify / watch)</h3>
+                  <div class="callout">
+                     <p class="eyebrow">Read this first</p>
+                     <p>Notifications work between processes on one machine. A process writes an event, and other processes polling the same file pick it up. Nothing crosses a machine boundary: if your subscribers run on different hosts, you need Redis or a message broker. Delivery takes about one poll interval (50&nbsp;ms, or up to about 1&nbsp;s after an idle spell). It's at-least-once, so make your handlers idempotent. This is not Redis Pub/Sub. Events are rows with a monotonic <code>seq</code>, kept for an hour by default, so a restarted subscriber picks up where it left off.</p>
+                  </div>
+                  <p>The main use is cross-worker cache invalidation:</p>
+                  <div class="snippet lang-group">
+                     <div class="snippet-head">
+                        <div class="pillrow" role="tablist" aria-label="Language">
+                           <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                           <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                           <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                           <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                           <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                        </div>
+                        <button class="copy-btn" data-copy>Copy</button>
+                     </div>
+                     <div class="snippet-pane is-active" data-lang="python">
+                        <pre><code data-syntax="python"># worker A, after committing a DB change
+cache.delete("balance:42")
+cache.notify("invalidate", {"key": "balance:42"})
+
+# workers B..N, on the same host
+with cache.watch("invalidate") as sub:
+    for event in sub:
+        local_memo.pop(event.payload["key"], None)</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="java">
+                        <pre><code data-syntax="java">// worker A, after committing a DB change
+cache.delete("balance:42");
+cache.notify("invalidate", Map.of("key", "balance:42"));
+
+// workers B..N, on the same host
+try (Subscription sub = cache.watch("invalidate")) {
+    for (Event e : sub) {
+        localMemo.remove(e.payload(Map.class).get("key"));
+    }
+}</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="node">
+                        <pre><code data-syntax="typescript">// worker A, after committing a DB change
+cache.delete("balance:42");
+cache.notify("invalidate", { key: "balance:42" });
+
+// workers B..N, on the same host
+using sub = cache.watch("invalidate");
+for await (const event of sub) {
+  localMemo.delete(event.payload.key);
+}</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="go">
+                        <pre><code data-syntax="go">// worker A, after committing a DB change
+cache.Delete("balance:42")
+cache.Notify("invalidate", map[string]any{"key": "balance:42"})
+
+// workers B..N, on the same host
+sub, err := cache.Watch([]string{"invalidate"})
+defer sub.Close()
+for ev := range sub.Events() {
+    var p struct{ Key string `json:"key"` }
+    ev.Decode(&amp;p)
+    delete(localMemo, p.Key)
+}</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="php">
+                        <pre><code data-syntax="php">// worker A, after committing a DB change
+$cache-&gt;delete("balance:42");
+$cache-&gt;notify("invalidate", ["key" =&gt; "balance:42"]);
+
+// a CLI worker on the same host (PHP polls inside the foreach)
+foreach ($cache-&gt;watch("invalidate") as $event) {
+    unset($localMemo[$event-&gt;payload()["key"]]);
+}</code></pre>
+                     </div>
+                  </div>
+                  <p>Channels are exact names, or end in <code>*</code> to match a prefix (<code>"cache:invalidate:*"</code>); <code>"*"</code> matches everything. Batch many events into one transaction with <code>notifyMany</code> (<code>notify_many</code>). For durable resume, store the last <code>seq</code> you <em>finished</em> handling and start from it next time. If retention already deleted events after your cursor, you get a gap error instead of a silent skip:</p>
+                  <div class="snippet lang-group">
+                     <div class="snippet-head">
+                        <div class="pillrow" role="tablist" aria-label="Language">
+                           <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                           <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                           <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                           <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                           <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                        </div>
+                        <button class="copy-btn" data-copy>Copy</button>
+                     </div>
+                     <div class="snippet-pane is-active" data-lang="python">
+                        <pre><code data-syntax="python">from lytecache import GapError
+
+try:
+    with cache.watch("jobs", from_seq=cache.load_cursor("worker-b")) as sub:
+        for event in sub:
+            handle(event)                              # must be idempotent
+            cache.save_cursor("worker-b", event.seq)
+except GapError as err:                            # events past retention are gone
+    resync()
+    cache.save_cursor("worker-b", err.resume_seq)  # accept the loss explicitly</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="java">
+                        <pre><code data-syntax="java">OptionalLong cursor = cache.loadCursor("worker-b");
+WatchOptions opts = cursor.isPresent()
+        ? WatchOptions.defaults().fromSeq(cursor.getAsLong())
+        : WatchOptions.defaults();
+try (Subscription sub = cache.watch(opts, "jobs")) {
+    for (Event e : sub) {
+        handle(e);                                   // must be idempotent
+        cache.saveCursor("worker-b", e.seq());
+    }
+} catch (GapException err) {                         // events past retention are gone
+    resync();
+    cache.saveCursor("worker-b", err.resumeSeq());   // accept the loss explicitly
+}</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="node">
+                        <pre><code data-syntax="typescript">import { GapError } from "lytecache";
+
+try {
+  using sub = cache.watch("jobs", { fromSeq: cache.loadCursor("worker-b") });
+  for await (const event of sub) {
+    handle(event);                                 // must be idempotent
+    cache.saveCursor("worker-b", event.seq);
+  }
+} catch (err) {
+  if (!(err instanceof GapError)) throw err;       // events past retention are gone
+  resync();
+  cache.saveCursor("worker-b", err.resumeSeq);     // accept the loss explicitly
+}</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="go">
+                        <pre><code data-syntax="go">var opts []lytecache.WatchOption
+if seq, ok, _ := cache.LoadCursor("worker-b"); ok {
+    opts = append(opts, lytecache.FromSeq(seq))
+}
+sub, err := cache.Watch([]string{"jobs"}, opts...)
+defer sub.Close()
+for ev := range sub.Events() {
+    handle(ev)                                     // must be idempotent
+    cache.SaveCursor("worker-b", ev.Seq)
+}
+var gap *lytecache.GapError
+if errors.As(sub.Err(), &amp;gap) {                    // events past retention are gone
+    resync()
+    cache.SaveCursor("worker-b", gap.ResumeSeq)    // accept the loss explicitly
+}</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="php">
+                        <pre><code data-syntax="php">use Lytecache\Exceptions\GapException;
+
+try {
+    foreach ($cache-&gt;watch("jobs", fromSeq: $cache-&gt;loadCursor("worker-b")) as $event) {
+        handle($event);                                // must be idempotent
+        $cache-&gt;saveCursor("worker-b", $event-&gt;seq);
+    }
+} catch (GapException $err) {                          // events past retention are gone
+    resync();
+    $cache-&gt;saveCursor("worker-b", $err-&gt;resumeSeq);   // accept the loss explicitly
+}</code></pre>
+                     </div>
+                  </div>
+                  <p>Retention (<code>event_retention</code>, default 1 hour, plus an optional count cap) sets how long a subscriber can be down without losing events. If you never call <code>notify</code> or <code>watch</code>, no events table is created and no polling thread starts. The full guide, latency numbers and the comparison with Redis are in <a href="https://github.com/lytecache/lytecache/blob/main/docs/notifications.md" target="_blank" rel="noopener">docs/notifications.md</a>.</p>
+               </div>
+               <div class="api-group" id="api-on-change">
+                  <h3>Change listeners</h3>
+                  <p>There are two ways to react to changes in the cache. <code>onChange</code> (<code>on_change</code>) works <strong>in-process</strong>. It's immediate and doesn't touch SQLite. Listeners run only after the write commits, so a rolled-back <code>setMany</code> notifies nobody, and a listener that throws never fails the write. <code>publishChanges</code> works <strong>across processes</strong>. It writes each matching mutation to the reserved <code>__cache__</code> channel, so it's polled and costs one event row per call. Either way, a bulk write produces <strong>one</strong> record, not one per key. Past 100 keys the key list is dropped and <code>truncated</code> is set.</p>
+                  <div class="snippet lang-group">
+                     <div class="snippet-head">
+                        <div class="pillrow" role="tablist" aria-label="Language">
+                           <button class="pill lang-btn active" data-lang-btn="python"><i class="lang-glyph lang-glyph-python" aria-hidden="true"></i>Python</button>
+                           <button class="pill lang-btn" data-lang-btn="java"><i class="lang-glyph lang-glyph-java" aria-hidden="true"></i>Java</button>
+                           <button class="pill lang-btn" data-lang-btn="node"><i class="lang-glyph lang-glyph-node" aria-hidden="true"></i>Node.js</button>
+                           <button class="pill lang-btn" data-lang-btn="go"><i class="lang-glyph lang-glyph-go" aria-hidden="true"></i>Go</button>
+                           <button class="pill lang-btn" data-lang-btn="php"><i class="lang-glyph lang-glyph-php" aria-hidden="true"></i>PHP</button>
+                        </div>
+                        <button class="copy-btn" data-copy>Copy</button>
+                     </div>
+                     <div class="snippet-pane is-active" data-lang="python">
+                        <pre><code data-syntax="python">def drop(rec):                       # a ChangeRecord: op, namespace, keys, count, truncated
+    if rec.truncated:
+        memo.clear()                 # a bulk change: refetch by namespace or prefix
+    else:
+        for key in rec.keys:
+            memo.pop(key, None)
+
+unsubscribe = cache.on_change(drop, events={"set", "delete", "flush"})
+cache.set_many(rows)                 # 1,000 keys -&gt; ONE record: count=1000, truncated=True
+
+# cross-process alternative: also publish deletes/flushes to "__cache__"
+cache = LyteCache(publish_changes={"delete", "flush"})</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="java">
+                        <pre><code data-syntax="java">Runnable unsubscribe = cache.onChange(rec -&gt; {
+    if (rec.truncated()) {
+        memo.clear();                // a bulk change: refetch by namespace or prefix
+    } else {
+        rec.keys().forEach(memo::remove);
+    }
+}, EnumSet.of(ChangeOp.SET, ChangeOp.DELETE, ChangeOp.FLUSH));
+
+// cross-process alternative: also publish deletes/flushes to "__cache__"
+LyteCache cache = LyteCache.builder().publishChanges(ChangeOp.DELETE, ChangeOp.FLUSH).build();</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="node">
+                        <pre><code data-syntax="typescript">const unsubscribe = cache.onChange((rec) =&gt; {
+  if (rec.truncated) memo.clear();   // a bulk change: refetch by namespace or prefix
+  else for (const key of rec.keys!) memo.delete(key);
+}, { events: ["set", "delete", "flush"] });
+
+// cross-process alternative: also publish deletes/flushes to "__cache__"
+const cache = new LyteCache({ publishChanges: ["delete", "flush"] });</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="go">
+                        <pre><code data-syntax="go">unsubscribe, err := cache.OnChange(func(rec lytecache.ChangeRecord) {
+    if rec.Truncated {
+        clear(memo)                  // a bulk change: refetch by namespace or prefix
+        return
+    }
+    for _, k := range rec.Keys {
+        delete(memo, k)
+    }
+}, lytecache.OpSet, lytecache.OpDelete, lytecache.OpFlush)
+defer unsubscribe()
+
+// cross-process alternative: also publish deletes/flushes to "__cache__"
+cache, err := lytecache.New(lytecache.WithPublishChanges(lytecache.OpDelete, lytecache.OpFlush))</code></pre>
+                     </div>
+                     <div class="snippet-pane" data-lang="php">
+                        <pre><code data-syntax="php">$unsubscribe = $cache-&gt;onChange(function (ChangeRecord $rec) use (&amp;$memo) {
+    if ($rec-&gt;truncated) {
+        $memo = [];                  // a bulk change: refetch by namespace or prefix
+    } else {
+        foreach ($rec-&gt;keys as $key) {
+            unset($memo[$key]);
+        }
+    }
+}, ["set", "delete", "flush"]);
+
+// cross-process alternative: also publish deletes/flushes to "__cache__"
+$cache = new LyteCache(publishChanges: ["delete", "flush"]);</code></pre>
+                     </div>
+                  </div>
+               </div>
             </section>
             <section class="section" id="storage-spec">
-               <p class="eyebrow">Cross-language</p>
+               <p class="eyebrow">Reference</p>
                <h2>Storage spec &amp; type codes</h2>
-               <p class="lead">Every implementation reads and writes the identical schema — one SQLite file, <abbr title="Write-Ahead Logging">WAL</abbr> mode, <code>PRAGMA busy_timeout=5000</code> so cross-process contention waits instead of failing. Every value is tagged with a <code>value_type</code> code:</p>
+               <p class="lead">Every implementation reads and writes the same schema: one SQLite file in <abbr title="Write-Ahead Logging">WAL</abbr> mode, with <code>PRAGMA busy_timeout=5000</code> so a process that finds the file locked waits instead of failing. Every value carries a <code>value_type</code> code:</p>
                <div class="table-wrap">
                   <table>
                      <thead>
@@ -1387,7 +2862,7 @@ def expensive(x):
                         <tr>
                            <td>2</td>
                            <td>Integer</td>
-                           <td>UTF-8 decimal text — <em>not</em> binary. This is what lets <code>incr</code>/<code>decr</code> be one atomic SQL <abbr title="Update-or-insert -- a single statement that inserts a new row or updates the existing one">UPSERT</abbr> in every language.</td>
+                           <td>UTF-8 decimal text, <em>not</em> binary. That's what lets <code>incr</code>/<code>decr</code> be one atomic SQL <abbr title="Update-or-insert -- a single statement that inserts a new row or updates the existing one">UPSERT</abbr> in every language.</td>
                         </tr>
                         <tr>
                            <td>3</td>
@@ -1402,7 +2877,7 @@ def expensive(x):
                         <tr>
                            <td>5</td>
                            <td>Python pickle</td>
-                           <td>Python-only escape hatch; reading it from Java, Node.js, Go, or PHP raises a clear error, never garbage</td>
+                           <td>Python-only escape hatch; reading it from Java, Node.js, Go, or PHP raises a clear error instead of returning garbage</td>
                         </tr>
                         <tr>
                            <td>6</td>
@@ -1414,11 +2889,11 @@ def expensive(x):
                </div>
                <p>Node.js has a single <code>number</code> type rather than Python's <code>int</code>/<code>float</code> or Java's <code>long</code>/<code>double</code>, so its implementation picks type code 2 vs. 3 by shape (<code>Number.isInteger()</code>) rather than by caller intent, using <code>bigint</code> for integers beyond <code>Number.MAX_SAFE_INTEGER</code>. See <a href="https://github.com/lytecache/lytecache/blob/main/lytecache-node/SPEC.md" target="_blank" rel="noopener">lytecache-node/SPEC.md</a> for the full rules.</p>
                <p>Go, like Python and Java, has distinct integer and floating-point types, so it decides type codes by the value's actual Go type rather than by shape: any Go integer type stores as code 2, <code>float32</code>/<code>float64</code> as code 3. A <code>uint64</code> beyond what signed 64-bit integers can hold is rejected outright rather than silently truncated. See <a href="https://github.com/lytecache/lytecache/blob/main/lytecache-go/SPEC.md" target="_blank" rel="noopener">lytecache-go/SPEC.md</a> for the full rules.</p>
-               <p>PHP strings are ambiguous between "raw bytes" and "text," unlike the other languages' distinct byte-array types, so lytecache uses a <code>Bytes</code> wrapper class to mean code 0 explicitly — a plain PHP <code>string</code> always stores as code 1. Objects serialize via <code>JsonSerializable</code> when implemented, else their public properties; a <code>DateTimeInterface</code> serializes to an RFC 3339 string and a <code>BackedEnum</code> to its backing value, matching the conventions above. See <a href="https://github.com/lytecache/lytecache/blob/main/lytecache-php/SPEC.md" target="_blank" rel="noopener">lytecache-php/SPEC.md</a> for the full rules.</p>
-               <p>The zero-config default path derivation (<code>&lt;project-id&gt;</code> = <abbr title="Secure Hash Algorithm, 256-bit -- a one-way fingerprint function">SHA-256</abbr> of the resolved working directory) is byte-for-byte identical across every implementation, so all of them land on the same file for the same project directory — see <a href="#where-is-my-data">Where is my data?</a> above.</p>
+               <p>PHP strings are ambiguous between "raw bytes" and "text," unlike the other languages' distinct byte-array types, so lytecache uses a <code>Bytes</code> wrapper class to mean code 0 explicitly. A plain PHP <code>string</code> always stores as code 1. Objects serialize via <code>JsonSerializable</code> when implemented, else their public properties; a <code>DateTimeInterface</code> serializes to an RFC 3339 string and a <code>BackedEnum</code> to its backing value, matching the conventions above. See <a href="https://github.com/lytecache/lytecache/blob/main/lytecache-php/SPEC.md" target="_blank" rel="noopener">lytecache-php/SPEC.md</a> for the full rules.</p>
+               <p>The zero-config default path derivation (<code>&lt;project-id&gt;</code> = <abbr title="Secure Hash Algorithm, 256-bit -- a one-way fingerprint function">SHA-256</abbr> of the resolved working directory) is byte-for-byte identical across every implementation, so all of them land on the same file for the same project directory. See <a href="#where-is-my-data">Where is my data?</a> above.</p>
             </section>
             <section class="section" id="glossary">
-               <p class="eyebrow">Cross-language</p>
+               <p class="eyebrow">Reference</p>
                <h2>Glossary</h2>
                <p class="lead">This page uses a handful of abbreviations without expanding them inline. Here's what each one means.</p>
                <div class="table-wrap">
@@ -1434,7 +2909,7 @@ def expensive(x):
                         <tr>
                            <td><abbr title="Application Programming Interface">API</abbr></td>
                            <td>Application Programming Interface</td>
-                           <td>The set of methods a library exposes for other code to call — in this case, <code>set</code>/<code>get</code>/<code>incr</code>/etc.</td>
+                           <td>The methods a library exposes for other code to call: here, <code>set</code>, <code>get</code>, <code>incr</code> and the rest.</td>
                         </tr>
                         <tr>
                            <td><abbr title="Command-Line Interface">CLI</abbr></td>
@@ -1459,7 +2934,7 @@ def expensive(x):
                         <tr>
                            <td><abbr title="Structured Query Language">SQL</abbr></td>
                            <td>Structured Query Language</td>
-                           <td>The language used to talk to SQLite — every read and write here compiles down to one SQL statement.</td>
+                           <td>The language used to talk to SQLite. Most operations here are a single SQL statement; batch writes run several inside one transaction.</td>
                         </tr>
                         <tr>
                            <td><abbr title="Write-Ahead Logging">WAL</abbr></td>
@@ -1506,7 +2981,7 @@ def expensive(x):
                </div>
             </section>
             <section class="section" id="cli">
-               <p class="eyebrow">Tooling</p>
+               <p class="eyebrow">Tools</p>
                <h2>Command-line interface</h2>
                <p class="lead">Inspect and manipulate any lytecache database file from a shell, the way <code>redis-cli</code> does for a server. It's built entirely on <a href="https://github.com/lytecache/lytecache-go" target="_blank" rel="noopener">lytecache-go</a>'s public API, so it can read and write a file created by any of the five languages above.</p>
                <h3>Install</h3>
@@ -1534,8 +3009,8 @@ scoop install lytecache</code></pre>
                </div>
                <p>Prebuilt binaries, SHA-256 checksums, and <code>.deb</code>/<code>.rpm</code> packages are attached to every <a href="https://github.com/lytecache/lytecache-cli/releases" target="_blank" rel="noopener">GitHub release</a>; a winget manifest ships the same way, pending submission to <code>microsoft/winget-pkgs</code>.</p>
                <h3>Docker</h3>
-               <p>Also published as a multi-arch (<code>linux/amd64</code>/<code>linux/arm64</code>) container image -- a ~7&nbsp;MB <code>scratch</code>-based image containing nothing but the static binary, for inspecting a cache file without installing Go. This packages <em>only</em> the CLI; lytecache has no server mode, so there's no listener, no daemon, no healthcheck to configure.</p>
-               <p>Mount the same volume your application uses at <code>/var/cache/lytecache</code> and set <code>LYTECACHE_PATH</code> to the value the app already uses, and the CLI needs no <code>--db</code> flag at all -- it resolves that env var exactly the way every library on this page does:</p>
+               <p>The CLI is also published as a multi-arch container image (<code>linux/amd64</code>, <code>linux/arm64</code>). It's about 7&nbsp;MB, built on <code>scratch</code> with nothing in it but the static binary, so you can inspect a cache file without installing anything. lytecache has no server mode: a CLI container runs one command and exits. (The <a href="#ui-docker">Admin UI</a> does serve a web page, but it isn't a cache server either.)</p>
+               <p>Mount the same volume your application uses at <code>/var/cache/lytecache</code> and set <code>LYTECACHE_PATH</code> to the value the app already uses, and the CLI needs no <code>--db</code> flag. It reads that variable exactly the way every library on this page does:</p>
                <div class="snippet">
                   <div class="snippet-head">
                      <span class="install-label">Terminal</span>
@@ -1545,7 +3020,7 @@ scoop install lytecache</code></pre>
   -e LYTECACHE_PATH=/var/cache/lytecache/cache.db \
   ghcr.io/lytecache/lytecache:latest stats</code></pre>
                </div>
-               <p>With Compose, add a service like this alongside whatever already runs your app — matching its <code>LYTECACHE_PATH</code> and mounting the same named volume is what makes <code>--db</code> unnecessary:</p>
+               <p>With Compose, add a service like this next to your app. It uses the same <code>LYTECACHE_PATH</code> and mounts the same named volume, which is why it needs no <code>--db</code>:</p>
                <div class="snippet">
                   <div class="snippet-head">
                      <span class="install-label">docker-compose.yml</span>
@@ -1565,7 +3040,7 @@ scoop install lytecache</code></pre>
 volumes:
   lytecache-data:</code></pre>
                </div>
-               <p><code>docker compose run --rm lytecache-cli stats</code> (or <code>keys</code>, or no command at all for the REPL) then just works — <code>run</code> reaches a profiled service directly even though <code>up</code> skips it. The volume goes on the <em>directory</em>, never the <code>.db</code> file itself, since WAL mode creates <code>cache.db-wal</code>/<code>cache.db-shm</code> beside it. Embed the binary in your own image with one line instead, since it's fully static and doesn't care what base image it lands in:</p>
+               <p>Then <code>docker compose run --rm lytecache-cli stats</code> works (or <code>keys</code>, or no command for the REPL). <code>run</code> reaches a profiled service even though <code>up</code> skips it. Mount the volume on the <em>directory</em>, not on the <code>.db</code> file: WAL mode creates <code>cache.db-wal</code> and <code>cache.db-shm</code> next to it. You can also copy the binary into your own image. It's fully static, so any base image works:</p>
                <div class="snippet">
                   <div class="snippet-head">
                      <span class="install-label">Dockerfile</span>
@@ -1573,7 +3048,7 @@ volumes:
                   </div>
                   <pre><code data-syntax="bash">COPY --from=ghcr.io/lytecache/lytecache:latest /lytecache /usr/local/bin/lytecache</code></pre>
                </div>
-               <p>Full details -- the <code>--db</code> one-liner for an arbitrary host file, the interactive REPL, a shell alias, the Compose profile pattern, and why sharing one <code>.db</code> file over NFS or Kubernetes <code>ReadWriteMany</code> isn't supported (SQLite's locking depends on guarantees network filesystems don't reliably provide) -- are in <a href="https://github.com/lytecache/lytecache-cli#docker" target="_blank" rel="noopener">lytecache-cli's README</a>.</p>
+               <p><a href="https://github.com/lytecache/lytecache-cli#docker" target="_blank" rel="noopener">lytecache-cli's README</a> has the rest: the <code>--db</code> one-liner for any file on the host, the interactive REPL, a shell alias, and the Compose profile pattern. It also explains why sharing one <code>.db</code> file over NFS or a Kubernetes <code>ReadWriteMany</code> volume isn't supported: SQLite's locking relies on guarantees that network filesystems don't reliably provide.</p>
                <h3>A session</h3>
                <div class="termcard linux-term" aria-label="Animated terminal session demo">
                   <div class="termcard-bar">
@@ -1622,7 +3097,12 @@ samson@lytecache:~$ </code></pre>
                         <tr><td><code>maintain</code> / <code>vacuum</code></td><td>Run a maintenance pass / reclaim disk space</td></tr>
                         <tr><td><code>which</code></td><td>Print the resolved database path and whether it exists</td></tr>
                         <tr><td><code>dump &lt;key&gt;</code></td><td>Raw row metadata, the view you reach for when debugging</td></tr>
-                        <tr><td><code>watch [interval]</code></td><td>Redraw <code>stats</code> every interval seconds until Ctrl-C</td></tr>
+                        <tr><td><code>stats --watch[=seconds]</code></td><td>Redraw <code>stats</code> every N seconds (default 2) until Ctrl-C</td></tr>
+                        <tr><td><code>hget &lt;key&gt; &lt;field&gt;</code> / <code>hgetall &lt;key&gt;</code></td><td>Print one field, or the whole object in document order</td></tr>
+                        <tr><td><code>hset &lt;key&gt; &lt;field&gt; &lt;value&gt;</code></td><td>Atomically set one field; prints <code>1</code> if it was new, <code>0</code> if replaced</td></tr>
+                        <tr><td><code>notify &lt;channel&gt; [payload]</code></td><td>Publish a local event; prints its seq</td></tr>
+                        <tr><td><code>watch &lt;pattern&gt;... [--from-seq N]</code></td><td>Tail events live, one JSON line per event (pipe into <code>jq</code>); exits 3 on a retention gap</td></tr>
+                        <tr><td><code>events [--limit 50]</code></td><td>Recent retained events (seq, channel, age, size) and retention stats</td></tr>
                      </tbody>
                   </table>
                </div>
@@ -1659,40 +3139,44 @@ samson@lytecache:~$ </code></pre>
   "timeout": 30
 }</code></pre>
                </div>
-               <p>No Python installation, no shared server, no export step: just the same SQLite file on disk. The two type codes the CLI can't decode — 5 for Python pickle, 6 for Java serialization — render as <code>(non-portable value: python-pickle, N bytes)</code> instead of erroring out or dumping garbage.</p>
+               <p>The CLI didn't need Python, a server or an export step. It read the same SQLite file. Two type codes can't be decoded outside their own language: 5 (Python pickle) and 6 (Java serialization). The CLI shows them as <code>(non-portable value: python-pickle, N bytes)</code> instead of failing or printing garbage.</p>
                <div class="callout good">
                   <p class="eyebrow">Prefer a browser?</p>
-                  <p>Everything above also works as a web console — see <a href="#ui">Admin UI</a> below.</p>
+                  <p>Everything above also works in a browser. See the <a href="#ui">Admin UI</a>.</p>
                </div>
             </section>
             <section class="section" id="ui">
-               <p class="eyebrow">Tooling</p>
+               <p class="eyebrow">Tools</p>
                <h2>Admin UI</h2>
-               <p class="lead">A local web console for the same database files the CLI reads — think RedisInsight or pgAdmin, not a cache server. It has no wire protocol and no application ever connects to it; it's <code>lytecache-go</code>'s public API with a browser on top, launched with <code>lytecache ui --port 7070</code>.</p>
-               <p>It ships in the exact same binary as the CLI above — there's no separate install. If you haven't installed <code>lytecache</code> yet, see <a href="#cli">Install</a> in the CLI section, or jump straight to <a href="#ui-docker">Docker</a> below if you'd rather not install anything locally at all.</p>
+               <p class="lead">A local web console for the same database files the CLI reads, like RedisInsight or pgAdmin. It isn't a cache server: it speaks no cache protocol and no application connects to it. It's <code>lytecache-go</code>'s public API with a browser on top, started with <code>lytecache ui --port 7070</code>.</p>
+               <p>It ships in the same binary as the CLI, so there's nothing extra to install. If you haven't installed <code>lytecache</code> yet, see <a href="#cli">Install</a> in the CLI section, or jump straight to <a href="#ui-docker">Docker</a> below if you'd rather not install anything locally at all.</p>
                <div class="feature-grid">
                   <div class="feature">
                      <h4>Fleet dashboard</h4>
-                     <p>Every configured database side by side — key count, size, hit rate, evictions, and a health flag when usage or expired-present counts creep up.</p>
+                     <p>Every configured database side by side, with a health flag when usage nears a cap, expired keys pile up, or a subscriber loses events.</p>
                   </div>
                   <div class="feature">
                      <h4>Delete-only, on purpose</h4>
-                     <p>It can remove data — never create or alter it. There's no route that accepts a new or edited value; the handler doesn't exist to reach.</p>
+                     <p>The UI can delete data. It cannot create or change it. There's no route that accepts a new or edited value, so even a hand-crafted request has nothing to reach.</p>
+                  </div>
+                  <div class="feature">
+                     <h4>Events tab</h4>
+                     <p>A live tail of each database's <code>notify</code> events, retention stats, and lag for every subscriber cursor. It can't publish events. With <code>--allow-delete</code> it can purge them.</p>
                   </div>
                   <div class="feature">
                      <h4>Prometheus <code>/metrics</code></h4>
-                     <p>Per-database gauges for key count, size, evictions, and expired-present, scraped from zero-write library calls.</p>
+                     <p>Per-database gauges for keys, size, evictions, expired-present, events and subscriber lag. A scrape never writes to the file.</p>
                   </div>
                   <div class="feature">
                      <h4>Runs in the background</h4>
-                     <p><code>lytecache service install</code> registers it with launchd, systemd, or Windows' SCM — survives logout, restarts on boot.</p>
+                     <p><code>lytecache service install</code> registers it with launchd, systemd or the Windows Service Control Manager, so it survives logout and starts on boot.</p>
                   </div>
                </div>
                <h3>Install and run it, step by step</h3>
                <ol class="steps">
                   <li>
                      <h4>Install <code>lytecache</code></h4>
-                     <p>It's one binary — the CLI and the Admin UI ship together, so there's nothing separate to install for either.</p>
+                     <p>The CLI and the Admin UI are one binary, so this one install covers both.</p>
                      <div class="snippet">
                         <div class="snippet-head">
                            <span class="install-label">Terminal</span>
@@ -1703,12 +3187,12 @@ samson@lytecache:~$ </code></pre>
                      <p>On Linux/Windows/from source, or want the Docker image instead? See <a href="#cli">Install</a> in the CLI section above.</p>
                   </li>
                   <li>
-                     <h4>Point it at a database — or don't</h4>
-                     <p>Know the path? Name it with <code>--db</code>. Not sure, or just testing? Skip this step entirely — running with zero flags auto-scans the standard cache locations for you (see the callout further down).</p>
+                     <h4>Point it at a database (optional)</h4>
+                     <p>If you know the path, name it with <code>--db</code>. If you don't, skip this step. With no flags at all, the UI scans the standard cache locations for you (details below).</p>
                   </li>
                   <li>
                      <h4>Run it</h4>
-                     <p>In the foreground first, to see it work — <code>Ctrl+C</code> stops it, nothing persists:</p>
+                     <p>Start it in the foreground first. <code>Ctrl+C</code> stops it, and nothing is left running:</p>
                      <div class="snippet">
                         <div class="snippet-head">
                            <span class="install-label">Terminal</span>
@@ -1716,15 +3200,15 @@ samson@lytecache:~$ </code></pre>
                         </div>
                         <pre><code data-syntax="bash">lytecache ui</code></pre>
                      </div>
-                     <p>Happy with it? Keep it running in the background instead (survives logout and reboot) — see <a href="#ui-background">Running as a background service</a> below.</p>
+                     <p>To keep it running across logouts and reboots, install it as a <a href="#ui-background">background service</a>.</p>
                   </li>
                   <li>
                      <h4>Open it and log in</h4>
-                     <p>Visit <code>http://127.0.0.1:7070</code> and log in with <code>admin</code>/<code>admin</code> — that lands you on the fleet dashboard.</p>
+                     <p>Visit <code>http://127.0.0.1:7070</code> and log in with <code>admin</code>/<code>admin</code>. You land on the fleet dashboard.</p>
                   </li>
                   <li>
                      <h4>Change the password before exposing it anywhere</h4>
-                     <p>Only matters if you plan to reach this from beyond <code>127.0.0.1</code> — and even then it's enforced, not just advised: binding elsewhere while the password is still <code>admin</code> refuses to start outright. Run <code>lytecache ui passwd</code> whenever you're ready for that.</p>
+                     <p>This only matters if you'll reach the UI from beyond <code>127.0.0.1</code>, and there it's enforced: the UI refuses to bind anywhere else while the password is still <code>admin</code>. Run <code>lytecache ui passwd</code> to change it.</p>
                   </li>
                </ol>
                <h3>Quickstart</h3>
@@ -1746,16 +3230,16 @@ read-only (pass --allow-delete to enable delete/flush/maintain)</code></pre>
                   </div>
                </noscript>
                <p>Open <code>http://127.0.0.1:7070</code>, log in with <code>admin</code>/<code>admin</code>, and you're at the fleet dashboard. Passing <code>--allow-delete</code> turns on delete/flush/maintain; without it, those routes return 403 whether or not the browser shows a button for them.</p>
-               <p>No <code>--db</code> handy? Run <code>lytecache ui</code> with no flags at all — with zero configuration given, it falls back to scanning two standard locations: the same <code>&lt;platform cache dir&gt;/lytecache</code> directory the library itself defaults to when your app doesn't call <code>WithPath</code> either, and <code>/var/cache/lytecache</code> — this project's own documented Docker volume-mount convention (see <a href="#ui-docker">Docker</a> below), so the same zero-flag default works whether you're running this on bare metal or in a container. Passing <em>any</em> <code>--db</code>/<code>--scan</code>/config-file entry turns this off entirely — it only applies when nothing else was configured.</p>
+               <p>With no <code>--db</code>, <code>--scan</code> or config file, <code>lytecache ui</code> scans two standard locations. One is <code>&lt;platform cache dir&gt;/lytecache</code>, where the library puts files when your app doesn't set a path. The other is <code>/var/cache/lytecache</code>, the volume-mount convention used in the <a href="#ui-docker">Docker</a> examples. So the same zero-flag start works on a laptop and in a container. Configure any database explicitly and the scan is skipped.</p>
                <h3>Using it</h3>
-               <p>Click any database row to drill into its key browser. The sidebar lists every namespace <strong>with its key count</strong>, so a mismatched namespace — the single most common "my key isn't there" surprise — is hard to miss. Click a key to open the value viewer: JSON pretty-printed and collapsible, everything else masked behind a "Reveal value" click until you ask for it. With <code>--allow-delete</code>, a delete button appears there too, plus bulk delete and a flush-namespace control that requires typing the namespace name back — no accidental wipes from a stray click.</p>
+               <p>Click a database row to open its key browser. The sidebar lists every namespace <strong>with its key count</strong>. A mismatched namespace is the most common reason a key seems to be missing, and this makes it hard to overlook. Click a key to open the value viewer. JSON is pretty-printed and collapsible, and every value stays hidden until you click "Reveal value". With <code>--allow-delete</code> you also get a delete button, bulk delete, and a flush-namespace control that makes you type the namespace name, so a stray click can't wipe anything.</p>
                <p><code>/</code> focuses the search box from anywhere (it searches every configured database, not just the one you're in); arrow keys move through a key list, <code>Esc</code> clears the current selection or search.</p>
                <div class="callout">
-                  <p class="eyebrow">Guardrails, not a settings screen</p>
-                  <p>Binding to anything other than <code>127.0.0.1</code> while the password is still <code>admin</code> refuses to start outright, and reaching it non-locally with a reset default password forces a password change before anything else is reachable — neither is a flag you can turn off. Reaching a remote instance? Prefer an SSH tunnel (<code>ssh -L 7070:localhost:7070 you@host</code>) over exposing the port at all.</p>
+                  <p class="eyebrow">Guardrails you can't switch off</p>
+                  <p>The UI refuses to bind anything other than <code>127.0.0.1</code> while the password is still <code>admin</code>. If someone reaches it from another machine after the password was reset to the default, it forces a password change before showing anything else. No flag turns either check off. To reach a remote instance, we'd use an SSH tunnel (<code>ssh -L 7070:localhost:7070 you@host</code>) rather than expose the port at all.</p>
                </div>
                <h3 id="ui-docker">Docker</h3>
-               <p>The image ships the <code>ui</code> subcommand too — bind <code>0.0.0.0</code> <em>inside</em> the container (a loopback bind is unreachable through published ports regardless of Docker's NAT rules) and re-restrict back to <code>127.0.0.1</code> on the host side:</p>
+               <p>The image includes the <code>ui</code> subcommand. Inside the container, bind <code>0.0.0.0</code>: Docker can't forward a published port to a listener that only accepts loopback. Then restrict it to <code>127.0.0.1</code> on the host side:</p>
                <div class="snippet">
                   <div class="snippet-head">
                      <span class="install-label">Terminal</span>
@@ -1768,8 +3252,8 @@ read-only (pass --allow-delete to enable delete/flush/maintain)</code></pre>
   ghcr.io/lytecache/lytecache:latest \
   ui --host 0.0.0.0 --insecure --no-metrics --db orders=/var/cache/lytecache/orders.db</code></pre>
                </div>
-               <p>Mount the config volume, not just the cache data volume — <code>ui.yaml</code> holds the credentials and session secret, and without it persisted, the admin password resets to <code>admin</code>/<code>admin</code> on every container recreation.</p>
-               <p>With Compose, add it as a profiled service alongside whatever already runs your app — matching its <code>LYTECACHE_PATH</code> and mounting the same named volume is what makes <code>--db</code> unnecessary, same as the CLI service above:</p>
+               <p>Mount the config volume as well as the cache volume. <code>ui.yaml</code> holds the credentials and the session secret. If it isn't on a volume, the password goes back to <code>admin</code>/<code>admin</code> every time the container is recreated.</p>
+               <p>With Compose, add it as a profiled service next to your app. As with the CLI service above, using the app's <code>LYTECACHE_PATH</code> and volume is what makes <code>--db</code> unnecessary:</p>
                <div class="snippet">
                   <div class="snippet-head">
                      <span class="install-label">docker-compose.yml</span>
@@ -1796,9 +3280,9 @@ volumes:
   lytecache-data:
   lytecache-ui-config:</code></pre>
                </div>
-               <p><code>docker compose --profile tools up -d lytecache-ui</code>, then open <code>http://127.0.0.1:7070</code>. Note this <code>ports:</code> mapping publishes on <strong>every</strong> network interface the host has, not just loopback — fine on a machine you trust the network of, but anyone who can reach this host's IP can now reach the UI too. If that's not what you want, restrict it back to the host itself with <code>"127.0.0.1:7070:7070"</code> instead. Either way, <code>--insecure</code> is only a reasonable trade-off as long as nothing untrusted shares that reachable network — swap it for <code>--tls-cert</code>/<code>--tls-key</code> once this is reachable beyond a single machine. The full example — plus a <code>--scan</code>-based fleet view across several services' caches sharing one volume — is in <a href="https://github.com/lytecache/lytecache-cli/blob/main/examples/docker-compose.yml" target="_blank" rel="noopener">lytecache-cli's <code>examples/docker-compose.yml</code></a>.</p>
+               <p>Run <code>docker compose --profile tools up -d lytecache-ui</code>, then open <code>http://127.0.0.1:7070</code>. Be aware that this <code>ports:</code> mapping publishes on <strong>every</strong> network interface the host has, not only loopback. Anyone who can reach the host's IP can reach the UI. To keep it on the host, use <code>"127.0.0.1:7070:7070"</code>. <code>--insecure</code> is only reasonable while nothing untrusted shares that network. Once the UI is reachable beyond one machine, replace it with <code>--tls-cert</code>/<code>--tls-key</code>. <a href="https://github.com/lytecache/lytecache-cli/blob/main/examples/docker-compose.yml" target="_blank" rel="noopener">lytecache-cli's <code>examples/docker-compose.yml</code></a> has the full example, including a <code>--scan</code> fleet view across several services' caches on one volume.</p>
                <h3>Pulling a newer image</h3>
-               <p>Docker doesn't re-fetch an already-present <code>:latest</code> image just because a newer one exists in the registry — <code>docker compose up</code> alone will happily keep running whatever you already have cached locally. Two ways to actually get the newer one:</p>
+               <p>Docker doesn't fetch a newer <code>:latest</code> on its own. If the image is already on your machine, <code>docker compose up</code> keeps using it. Two ways to get the new one:</p>
                <div class="snippet">
                   <div class="snippet-head">
                      <span class="install-label">Terminal</span>
@@ -1811,30 +3295,30 @@ docker compose up -d --force-recreate lytecache-ui
 # or do both in one command
 docker compose up -d --pull always lytecache-ui</code></pre>
                </div>
-               <p>To make this the default without remembering a flag every time, add <code>pull_policy: always</code> to the service (already in the snippet above) — then a plain <code>docker compose up -d lytecache-ui</code> always checks for a newer <code>:latest</code> first.</p>
+               <p>To make that the default, add <code>pull_policy: always</code> to the service, as the snippet above does. Then a plain <code>docker compose up -d lytecache-ui</code> checks for a newer <code>:latest</code> first.</p>
                <h3 id="ui-multi-service">Multiple app services, one Admin UI</h3>
-               <p>The single most common setup mistake: if each of your app services caches to its own file or volume, <code>lytecache-ui</code> has to actually mount the <em>same</em> volume(s) they write to. Pointing it at a leftover or unrelated volume "works" in the sense that the container starts fine — it just shows an empty dashboard, because it's genuinely looking at a different place than your app does.</p>
+               <p>This is the most common setup mistake. <code>lytecache-ui</code> has to mount the same volumes your app services write to. Point it at a leftover or unrelated volume and the container still starts. It just shows an empty dashboard, because it's looking somewhere your app isn't.</p>
                <p>Two patterns handle this correctly, trading a bit of setup for a bit of isolation:</p>
                <div class="fit-grid">
                   <div class="fit-col">
                      <h3><span class="fit-mark yes">✓</span> One shared volume, one file per service</h3>
                      <ul>
                         <li>Each service gets its own <code>LYTECACHE_PATH</code> filename (<code>admin.db</code>, <code>pos.db</code>, ...) but mounts the <em>same</em> volume</li>
-                        <li><code>lytecache-ui</code> mounts that one volume and uses <code>--scan</code> — new services need zero <code>lytecache-ui</code> changes</li>
-                        <li>Recommended default for most fleets</li>
+                        <li><code>lytecache-ui</code> mounts that one volume and uses <code>--scan</code>, so adding a service needs no change to <code>lytecache-ui</code></li>
+                        <li>The setup we recommend for most fleets</li>
                      </ul>
                   </div>
                   <div class="fit-col">
                      <h3><span class="fit-mark no">✕</span> One shared file for everything</h3>
                      <ul>
-                        <li>Every service's writes serialize against <em>every other</em> service's writes, not just its own — SQLite's single-writer model has no concept of "unrelated" callers</li>
+                        <li>Every service's writes queue behind <em>every other</em> service's. SQLite has one writer at a time and can't tell which callers are unrelated.</li>
                         <li>One corrupted/locked file takes down cache access for your whole fleet at once, not just the service that caused it</li>
                         <li>Collapses the dashboard to one row instead of one per service</li>
                         <li>Not recommended unless you've implemented per-service namespace isolation in application code (see below) and accept the write-contention trade-off</li>
                      </ul>
                   </div>
                </div>
-               <p>A third option — one <em>separate</em> volume per service, exactly as isolated as separate files, just more explicit — works too: mount all of them into <code>lytecache-ui</code>, each at its own subdirectory, and use repeatable <code>--db name=path</code> flags instead of <code>--scan</code>. More manual wiring per new service, but a lock or corruption issue in one file can't touch any other.</p>
+               <p>A third option also works: a <em>separate</em> volume per service. Mount each one into <code>lytecache-ui</code> at its own subdirectory and use repeatable <code>--db name=path</code> flags instead of <code>--scan</code>. Each new service needs more wiring, but a lock or corruption problem in one file can't touch the others.</p>
                <div class="table-wrap">
                   <table>
                      <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
@@ -1842,11 +3326,11 @@ docker compose up -d --pull always lytecache-ui</code></pre>
                         <tr>
                            <td>Dashboard shows "No databases configured", or a database with zero keys</td>
                            <td><code>lytecache-ui</code> mounts a different volume than your app services actually write to</td>
-                           <td>Mount the exact same volume(s) your services use — never a separate one "for the UI"</td>
+                           <td>Mount the same volumes your services use. Don't create a separate one for the UI.</td>
                         </tr>
                         <tr>
                            <td>A <code>LYTECACHE_NAMESPACE</code> (or similarly-named) env var seems to do nothing</td>
-                           <td>It isn't a real setting — no implementation reads it from the environment</td>
+                           <td>It isn't a real setting. No implementation reads a namespace from the environment.</td>
                            <td>Isolate services by <em>file</em> (distinct <code>LYTECACHE_PATH</code> per service), or by namespace via <code>WithNamespace(...)</code> in actual application code</td>
                         </tr>
                         <tr>
@@ -1861,7 +3345,7 @@ docker compose up -d --pull always lytecache-ui</code></pre>
                         </tr>
                         <tr>
                            <td>Every app service looks migrated to the new volume layout, but the dashboard is still empty</td>
-                           <td><code>lytecache-ui</code> itself didn't get updated — easy to update every app service and forget the one service that actually has to see all of them</td>
+                           <td><code>lytecache-ui</code> itself wasn't updated. It's easy to move every app service and forget the one that has to see all of them.</td>
                            <td>Double-check <code>lytecache-ui</code>'s own <code>volumes:</code>/<code>command:</code> match whatever your app services just moved to</td>
                         </tr>
                      </tbody>
@@ -1870,7 +3354,7 @@ docker compose up -d --pull always lytecache-ui</code></pre>
                <h3 id="ui-background">Running as a background service</h3>
                <div class="callout good">
                   <p class="eyebrow">Installed via Homebrew?</p>
-                  <p><code>service install</code> already ran for you, automatically, the moment <code>brew install</code>/<code>brew upgrade</code> finished (registered only — never started, so nothing is listening until you choose to). Skip straight to <code>lytecache service start</code> below.</p>
+                  <p>Homebrew already ran <code>service install</code> for you when <code>brew install</code> or <code>brew upgrade</code> finished. It only registers the service, so nothing is listening until you start it. Go straight to <code>lytecache service start</code> below.</p>
                </div>
                <div class="snippet">
                   <div class="snippet-head">
@@ -1881,8 +3365,8 @@ docker compose up -d --pull always lytecache-ui</code></pre>
 lytecache service start
 lytecache service status</code></pre>
                </div>
-               <p>Every flag <code>lytecache ui</code> accepts is also accepted by <code>service install</code>, and gets persisted so it starts identically every time — a user LaunchAgent on macOS, a user systemd unit on Linux (<code>--system</code> for a system-wide one), and the Service Control Manager on Windows when elevated, falling back to a Scheduled Task at logon otherwise. Re-running <code>service install</code> any time (with different flags, e.g. to add <code>--db</code>) replaces the persisted config — no need to uninstall first.</p>
-               <p>Full details — masking sensitive values, the audit log, a paste-ready Prometheus <code>scrape_config</code>, and the complete default-credential guardrail matrix — are in <a href="https://github.com/lytecache/lytecache-cli/blob/main/docs/ui.md" target="_blank" rel="noopener">lytecache-cli's <code>docs/ui.md</code></a>.</p>
+               <p><code>service install</code> accepts every flag <code>lytecache ui</code> does and saves them, so the service starts the same way every time. It installs a user LaunchAgent on macOS and a user systemd unit on Linux (<code>--system</code> for a system-wide unit). On Windows it uses the Service Control Manager from an elevated shell, and a Scheduled Task at logon otherwise. To change the flags, for example to add a <code>--db</code>, run <code>service install</code> again. You don't need to uninstall first.</p>
+               <p><a href="https://github.com/lytecache/lytecache-cli/blob/main/docs/ui.md" target="_blank" rel="noopener">lytecache-cli's <code>docs/ui.md</code></a> covers the rest: masking sensitive values, the audit log, a paste-ready Prometheus <code>scrape_config</code> with alert rules, reading subscriber lag, and the full default-credential guardrails.</p>
             </section>
          </main>
       </div>

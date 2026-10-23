@@ -1,0 +1,44 @@
+{{define "title"}}Lytecache -- {{.DB}} event {{.Seq}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1><a class="mono" href="/db/{{.DB}}/events">{{.DB}} / events</a> <span class="sep">/</span> <span class="mono">{{if .Found}}{{.Seq}}{{else}}?{{end}}</span></h1>
+</div>
+
+{{if not .Found}}
+<p class="empty-state">Not found: the event was deleted by retention or a purge.</p>
+{{else}}
+<dl class="meta-grid">
+  <dt>seq</dt><dd class="num">{{.Seq}}</dd>
+  <dt>channel</dt><dd class="mono">{{.Channel}}</dd>
+  <dt>namespace</dt><dd class="mono">{{.Namespace}}</dd>
+  <dt>type</dt><dd>{{.TypeName}}</dd>
+  <dt>size</dt><dd>{{.SizeBytes}} bytes</dd>
+  <dt>published</dt><dd class="timestamp">{{.Time}} UTC ({{.Age}} ago)</dd>
+</dl>
+
+{{if .Masked}}
+<p class="masked-notice">{{.Message}}</p>
+{{else if .NonPortable}}
+<p class="non-portable-notice">{{.Message}}</p>
+{{else}}
+<details class="value-reveal">
+  <summary>Reveal payload</summary>
+  {{if .IsJSON}}
+  <pre class="json-value" data-json>{{.Rendered}}</pre>
+  {{else}}
+  <pre class="plain-value">{{.Rendered}}</pre>
+  {{end}}
+</details>
+{{end}}
+
+{{if .AllowDelete}}
+<div class="danger-zone">
+  <form method="post" action="/db/{{.DB}}/events/delete-event" class="inline-form" data-confirm="Delete this event?">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="hidden" name="seq" value="{{.Seq}}">
+    <button type="submit" class="danger">delete event</button>
+  </form>
+</div>
+{{end}}
+{{end}}
+{{end}}

@@ -4,6 +4,8 @@ This document defines the storage schema and type encoding for the PHP implement
 
 ## Schema Version
 
+- **Events table**: a file may also contain an `events` table and an `('events_version', '1')` row in `meta`, created the first time `notify`/`watch` is used. This is "schema version 2" in the root [SPEC.md](../SPEC.md#schema-versions). It is purely additive, so `schema_version` stays `1` and older libraries keep opening the file.
+
 - **Current**: 1
 - **Compatibility**: Higher versions are rejected on open with `SchemaVersionException`.
 
@@ -140,6 +142,28 @@ A statement that returns a single row (e.g. the read-back inside `incr`'s atomic
 ## Namespace Isolation
 
 The `namespace` column lets multiple independent caches share one file. Every query is scoped to `namespace`; different namespaces never see each other's keys, including for `flush()`.
+
+
+## Events and Hashes
+
+The normative rules for both features live in the root [SPEC.md](../SPEC.md): the
+`events` table and polling query, delivery semantics, the gap rule, change records,
+the hash path construction, type guards, TTL and `size_bytes` handling, and the JSON1
+fallback. This implementation follows them exactly. The PHP-specific surface:
+
+**Events** (single host only, polled, durable; see [docs/notifications.md](../docs/notifications.md)):
+- `notify(string $channel, mixed $payload = null): int` and `notifyMany(array $events): array`, with each event a `[channel, payload]` pair.
+- `watch(string|array $channels, ?int $fromSeq = null, float $pollInterval = 0.05): Subscription`. PHP has no threads, so the subscription polls inside the consuming call (`foreach`, `poll(?float $timeout)`, `tryNext()`) on its own `query_only` PDO connection, with the same adaptive backoff. `Event::payload()` decodes lazily.
+- `onChange(callable, array $events)` calls listeners synchronously right after the mutating call's COMMIT, never inside the transaction. A counter is the depth guard.
+- Constructor options: `publishChanges`, `eventRetention`, `eventMaxCount`, `changeKeyCap`, and `logger` (a `Closure(string)`, default `error_log`).
+
+**Hashes** (atomic field writes over value_type-4 JSON objects; no schema change):
+- `hset`, `hsetnx`, `hsetMany`, `hget`, `hmget`, `hgetAll`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincrBy`, `hincrByFloat`. JSON objects decode to arrays, as with `get()`.
+- PDO binds untyped values as TEXT, which `json_object()` would store as strings. Integers are therefore bound with `PDO::PARAM_INT`, and the float amount is passed as text and `CAST(... AS REAL)` in SQL.
+- The fallback keeps each field's exact JSON text and key order (it does not round-trip through `json_decode`, which would turn `{}` into `[]` and round big integers).
+
+`hashMode()` / `CacheStats::$hashMode` reports `"json1"` or `"fallback"`. `LYTECACHE_FORCE_JSON_FALLBACK=1` forces the fallback.
+
 
 ## Example: Cross-Language Read
 

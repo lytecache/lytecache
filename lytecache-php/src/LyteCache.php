@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace Lytecache;
 
 use Lytecache\Exceptions\CacheFullException;
+use Lytecache\Exceptions\GapException;
 use Lytecache\Exceptions\LockTimeoutException;
 use Lytecache\Exceptions\NotNumericException;
 use Lytecache\Exceptions\SchemaVersionException;
 use Lytecache\Exceptions\SerializationException;
+use Lytecache\Support\JsonObject;
 use Lytecache\Support\Paths;
 use Lytecache\Support\Schema;
 use Lytecache\Support\Serializer;
+use Lytecache\Support\Statement;
 
 /**
  * An embedded, Redis-like cache backed by a SQLite file.
@@ -88,6 +91,26 @@ final class LyteCache
 
     private bool $closed = false;
 
+    /** JSON1 support for hash operations, detected once at open. */
+    private readonly bool $json1;
+
+    // Events and change listeners are opt-in: none of this costs anything
+    // (no table, no work) until notify/watch/onChange is first used.
+    private bool $eventsReady = false;
+
+    /** @var list<Subscription> */
+    private array $subscriptions = [];
+
+    /** @var array<int, array{0: \Closure, 1: list<string>}> */
+    private array $listeners = [];
+
+    private int $nextListenerId = 0;
+
+    private int $dispatchDepth = 0;
+
+    /** @var \Closure(string): void */
+    private readonly \Closure $logger;
+
     /**
      * @param  string|null  $path  Explicit database file path; default: {@see self::defaultPath()}.
      * @param  string  $namespace  Logical partition within the database file.
@@ -101,6 +124,14 @@ final class LyteCache
      * @param  bool  $strict  When false (default), a read that hits an internal deserialization
      *                        error degrades to a miss rather than throwing. When true, it throws
      *                        {@see SerializationException}. Writes always throw, in both modes.
+     * @param  list<string>  $publishChanges  Mutations ("set", "delete", "flush") that also publish a
+     *                                        {@see ChangeRecord} to the reserved "__cache__" channel, for
+     *                                        watchers in other processes on this host. Off by default; each costs one event row
+     *                                        written under the write lock (per call, not per key).
+     * @param  float  $eventRetention  Seconds events are kept before maintenance deletes them, read or not.
+     * @param  int|null  $eventMaxCount  Additionally keep at most this many newest events.
+     * @param  int  $changeKeyCap  Keys a {@see ChangeRecord} lists before it is truncated.
+     * @param  (\Closure(string): void)|null  $logger  Receives warnings (default: error_log()).
      */
     public function __construct(
         ?string $path = null,
@@ -110,7 +141,23 @@ final class LyteCache
         private readonly Eviction $eviction = Eviction::LRU,
         private readonly ?float $sweepInterval = 60.0,
         private readonly bool $strict = false,
+        private readonly array $publishChanges = [],
+        private readonly float $eventRetention = 3600.0,
+        private readonly ?int $eventMaxCount = null,
+        private readonly int $changeKeyCap = 100,
+        ?\Closure $logger = null,
     ) {
+        foreach ($publishChanges as $op) {
+            if (! in_array($op, self::CHANGE_OPS, true)) {
+                throw new \InvalidArgumentException("lytecache: publishChanges must be a subset of set, delete, flush; got \"{$op}\"");
+            }
+        }
+        if ($eventRetention <= 0) {
+            throw new \InvalidArgumentException('lytecache: eventRetention must be positive');
+        }
+        $this->logger = $logger ?? static function (string $message): void {
+            error_log($message);
+        };
         $this->path = $path === null ? self::defaultPath() : Paths::expandHome($path);
 
         $dir = dirname($this->path);
@@ -120,6 +167,7 @@ final class LyteCache
 
         $this->pdo = $this->openWithRetry($this->path);
         $this->lastMaintenanceAt = microtime(true);
+        $this->json1 = $this->detectJson1();
     }
 
     /**
@@ -161,6 +209,10 @@ final class LyteCache
             try {
                 $pdo = new \PDO('sqlite:'.$path, options: [
                     \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+                    // Resets each statement before it runs, so a cached statement whose
+                    // last execution failed can't silently drop the next write. See
+                    // Support\Statement.
+                    \PDO::ATTR_STATEMENT_CLASS => [Statement::class],
                 ]);
 
                 foreach (Schema::PRAGMAS as $pragma) {
@@ -228,6 +280,11 @@ final class LyteCache
         }
     }
 
+    /**
+     * Cached prepared statements. Reuse is safe even after a failed execution,
+     * because the connection's statement class (Support\Statement) resets every
+     * statement before running it.
+     */
     private function prepare(string $sql): \PDOStatement
     {
         return $this->stmtCache[$sql] ??= $this->pdo->prepare($sql);
@@ -366,6 +423,7 @@ final class LyteCache
             ':size' => strlen($data),
         ], ':value', $data);
 
+        $this->changed('set', [$key], 1);
         $this->maybeEvict();
         $this->maybeMaintain();
     }
@@ -453,8 +511,12 @@ final class LyteCache
         $sql = 'DELETE FROM cache WHERE namespace = :ns AND key IN ('.implode(',', $placeholders).')';
         $stmt = $this->prepare($sql);
         $this->executeWithRetry(fn () => $stmt->execute($params));
+        $removed = $stmt->rowCount();
+        if ($removed > 0) {
+            $this->changed('delete', array_values(array_unique($keys)), $removed);
+        }
 
-        return $stmt->rowCount();
+        return $removed;
     }
 
     /** Whether $key is present and not expired. */
@@ -483,6 +545,11 @@ final class LyteCache
     /** Sets $key only if it is currently absent or expired (Redis "SET NX"), atomically. */
     public function add(string $key, mixed $value, ?float $ttl = null): bool
     {
+        return $this->addInternal($key, $value, $ttl, true);
+    }
+
+    private function addInternal(string $key, mixed $value, ?float $ttl, bool $emit): bool
+    {
         $this->assertOpen();
         [$data, $type] = Serializer::encode($value);
 
@@ -508,6 +575,9 @@ final class LyteCache
 
         $added = $stmt->rowCount() > 0;
         if ($added) {
+            if ($emit) {
+                $this->changed('set', [$key], 1);
+            }
             $this->maybeEvict();
         }
         $this->maybeMaintain();
@@ -539,9 +609,13 @@ final class LyteCache
             ':key' => $key,
         ], ':value', $data);
 
+        $replaced = $stmt->rowCount() > 0;
+        if ($replaced) {
+            $this->changed('set', [$key], 1);
+        }
         $this->maybeMaintain();
 
-        return $stmt->rowCount() > 0;
+        return $replaced;
     }
 
     /**
@@ -586,6 +660,7 @@ final class LyteCache
             $stmt->execute();
         });
 
+        $this->changed('set', [$key], 1);
         $this->maybeMaintain();
 
         if (! $hadPrevious || $old === null) {
@@ -635,6 +710,8 @@ final class LyteCache
             }
         });
 
+        // ONE change record for the whole batch, never one per key.
+        $this->changed('set', array_map('strval', array_keys($entries)), count($entries));
         $this->maybeEvict();
         $this->maybeMaintain();
     }
@@ -884,6 +961,7 @@ final class LyteCache
         $value = $select->fetchColumn();
         $select->closeCursor();
 
+        $this->changed('set', [$key], 1);
         $this->maybeMaintain();
 
         return (string) $value;
@@ -930,6 +1008,1101 @@ final class LyteCache
         }
 
         return (float) $text;
+    }
+
+    // ---------------------------------------------------------------
+    // Hashes: field-level access to JSON object values
+    // ---------------------------------------------------------------
+    //
+    // A hash is not a separate type: it is a view over an ordinary
+    // value_type-4 row whose JSON root is an object. Anything written with
+    // set($key, [...]) is usable with hget(), and get() on a hash returns the
+    // whole document. The reason these exist is atomicity: on the JSON1 path
+    // every write is computed inside SQLite from the row's *current* value
+    // (json_set/json_remove), so two PHP-FPM workers updating different
+    // fields never lose each other's write. Where an exact return value needs
+    // more than one statement (hset's "created", hdel's count), guarded
+    // writes run inside one BEGIN IMMEDIATE transaction; no write depends on
+    // data read into PHP. The read-modify-write fallback (system SQLite
+    // without JSON1 -- the realistic case for PHP -- or
+    // LYTECACHE_FORCE_JSON_FALLBACK=1) holds the write lock throughout.
+
+    private const FORCE_JSON_FALLBACK_ENV = 'LYTECACHE_FORCE_JSON_FALLBACK';
+
+    private const HSET_MANY_PER_STATEMENT = 500;
+
+    private const JSON_SET_PAIRS = 30;
+
+    private const DOC = 'CAST(cache.value AS TEXT)';
+
+    private const LIVE = '(cache.expires_at IS NULL OR cache.expires_at > :now)';
+
+    private const EXPIRED = '(cache.expires_at IS NOT NULL AND cache.expires_at <= :now)';
+
+    private const ROOT_TYPE = '(CASE WHEN json_valid('.self::DOC.') THEN json_type('.self::DOC.') END)';
+
+    private const IS_OBJ = '(cache.value_type = 4 AND CASE WHEN json_valid('.self::DOC.') THEN json_type('.self::DOC.") END = 'object')";
+
+    private const TYPE_NAMES = [0 => 'bytes', 1 => 'string', 2 => 'int', 3 => 'float', 4 => 'json', 5 => 'pickle', 6 => 'java-native'];
+
+    /** Field names are always bound, never interpolated: $."field" with \ and " escaped, in SQL. */
+    private static function jsonPath(string $param): string
+    {
+        return <<<SQL
+            ('$."' || replace(replace(:{$param}, '\\', '\\\\'), '"', '\\"') || '"')
+            SQL;
+    }
+
+    private static function fieldType(string $param): string
+    {
+        return '(CASE WHEN '.self::IS_OBJ.' THEN json_type('.self::DOC.', '.self::jsonPath($param).') END)';
+    }
+
+    /**
+     * JSON text for a REAL with the fewest digits that round-trip exactly.
+     * SQLite before ~3.5x renders a REAL into JSON (and CAST(x AS TEXT)) with
+     * 15 significant digits, which would store 0.1 + 0.2 as 0.3; this picks
+     * the shortest of 15/16/17 digits that reads back to the same double, on
+     * every SQLite version.
+     */
+    private static function floatText(string $expr): string
+    {
+        $p = static fn (int $n): string => "printf('%!.{$n}g', {$expr})";
+
+        return "(CASE WHEN CAST({$p(15)} AS REAL) = {$expr} THEN {$p(15)} WHEN CAST({$p(16)} AS REAL) = {$expr} THEN {$p(16)} ELSE {$p(17)} END)";
+    }
+
+    /**
+     * An UPSERT that creates $freshDoc for a missing/expired key, or
+     * rewrites a live JSON object to $liveDoc when $where holds. expires_at
+     * is preserved on a live row and size_bytes is recomputed from the new
+     * value in the same statement.
+     */
+    private static function upsertHashSql(string $liveDoc, string $freshDoc, string $where): string
+    {
+        $expired = self::EXPIRED;
+        $newDoc = "CAST(CASE WHEN {$expired} THEN {$freshDoc} ELSE {$liveDoc} END AS BLOB)";
+
+        return <<<SQL
+            INSERT INTO cache (key, namespace, value, value_type, created_at, expires_at, last_accessed, access_count, size_bytes)
+            VALUES (:key, :ns, CAST({$freshDoc} AS BLOB), 4, :now, :exp, :now, 0, length(CAST({$freshDoc} AS BLOB)))
+            ON CONFLICT(namespace, key) DO UPDATE SET
+              value = {$newDoc},
+              value_type = 4,
+              created_at = CASE WHEN {$expired} THEN :now ELSE cache.created_at END,
+              expires_at = CASE WHEN {$expired} THEN :exp ELSE cache.expires_at END,
+              last_accessed = :now,
+              access_count = CASE WHEN {$expired} THEN 0 ELSE cache.access_count + 1 END,
+              size_bytes = length({$newDoc})
+            WHERE {$expired} OR {$where}
+            SQL;
+    }
+
+    private function detectJson1(): bool
+    {
+        if ((string) getenv(self::FORCE_JSON_FALLBACK_ENV) !== '') {
+            ($this->logger)('lytecache: '.self::FORCE_JSON_FALLBACK_ENV.' is set; hash operations use the read-modify-write fallback');
+
+            return false;
+        }
+        try {
+            $row = self::query($this->pdo, <<<'SQL'
+                SELECT json_valid('{}') AS ok, '{"a\"b":[1]}' -> '$."a\"b"' AS arr
+                SQL)->fetch(\PDO::FETCH_ASSOC);
+            if (is_array($row) && (int) $row['ok'] === 1 && $row['arr'] === '[1]') {
+                return true;
+            }
+        } catch (\PDOException) {
+            // fall through: no JSON1, or no -> operator
+        }
+        $version = (string) self::query($this->pdo, 'SELECT sqlite_version()')->fetchColumn();
+        ($this->logger)("lytecache: SQLite {$version} lacks the JSON1 support hash operations need (JSON functions, the -> "
+            .'operator and escaped path labels); falling back to a slower read-modify-write under BEGIN IMMEDIATE');
+
+        return false;
+    }
+
+    /** "json1" (single SQL statements) or "fallback" (read-modify-write under BEGIN IMMEDIATE). */
+    public function hashMode(): string
+    {
+        return $this->json1 ? 'json1' : 'fallback';
+    }
+
+    /**
+     * Prepares and runs $sql, binding ints as INTEGER (PDO would otherwise
+     * bind them as TEXT, which json_object() would store as strings), null
+     * as NULL and {@see Bytes} as a BLOB.
+     *
+     * @param  array<string, int|float|string|bool|null|Bytes>  $params
+     */
+    private function run(string $sql, array $params): \PDOStatement
+    {
+        $stmt = $this->prepare($sql);
+        foreach ($params as $k => $v) {
+            // pdo_sqlite rejects a bound name the statement doesn't use, so
+            // only bind those that appear (":f1" must not match ":f10").
+            if (preg_match('/'.preg_quote($k, '/').'(?![A-Za-z0-9_])/', $sql) !== 1) {
+                continue;
+            }
+            match (true) {
+                is_int($v) => $stmt->bindValue($k, $v, \PDO::PARAM_INT),
+                is_bool($v) => $stmt->bindValue($k, $v ? 1 : 0, \PDO::PARAM_INT),
+                $v === null => $stmt->bindValue($k, null, \PDO::PARAM_NULL),
+                $v instanceof Bytes => $stmt->bindValue($k, $v->value, \PDO::PARAM_LOB),
+                default => $stmt->bindValue($k, (string) $v),
+            };
+        }
+        $stmt->execute();
+
+        return $stmt;
+    }
+
+    /** @return array<string, int|string|null> */
+    private function hashParams(string $key, int $now, ?float $ttl): array
+    {
+        return [':ns' => $this->namespace, ':key' => $key, ':now' => $now, ':exp' => $ttl === null ? null : $now + (int) round($ttl * 1000)];
+    }
+
+    /** @internal PDO::query() with ERRMODE_EXCEPTION, typed as never returning false. */
+    public static function query(\PDO $pdo, string $sql): \PDOStatement
+    {
+        $stmt = $pdo->query($sql);
+        if ($stmt === false) {
+            throw new \RuntimeException("lytecache: query failed: {$sql}"); // @codeCoverageIgnore
+        }
+
+        return $stmt;
+    }
+
+    private static function wrongType(string $key, int $valueType, ?string $rootType): SerializationException
+    {
+        if ($valueType !== Schema::TYPE_JSON) {
+            $name = self::TYPE_NAMES[$valueType] ?? 'unknown';
+
+            return new SerializationException("lytecache: key \"{$key}\" holds a value of type {$name} (value_type={$valueType}), "
+                .'not a JSON object; hash operations apply only to JSON objects (value_type=4)');
+        }
+        if ($rootType === null) {
+            return new SerializationException("lytecache: key \"{$key}\" holds malformed JSON (value_type=4)");
+        }
+
+        return new SerializationException("lytecache: key \"{$key}\" holds a JSON {$rootType}, not a JSON object; hash operations apply only to JSON objects");
+    }
+
+    private function checkHashType(string $key, int $now): void
+    {
+        $stmt = $this->run('SELECT cache.value_type AS vt, '.self::ROOT_TYPE.' AS root FROM cache WHERE namespace = :ns AND key = :key AND '.self::LIVE,
+            [':ns' => $this->namespace, ':key' => $key, ':now' => $now]);
+        /** @var array{vt: int, root: string|null}|false $row */
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
+        if ($row !== false && ! ((int) $row['vt'] === Schema::TYPE_JSON && $row['root'] === 'object')) {
+            throw self::wrongType($key, (int) $row['vt'], $row['root']);
+        }
+    }
+
+    /** Fallback path: the live document, or null if the key is missing/expired. */
+    private function loadHash(string $key, int $now): ?JsonObject
+    {
+        $stmt = $this->run('SELECT value, value_type FROM cache WHERE namespace = :ns AND key = :key AND '.self::LIVE,
+            [':ns' => $this->namespace, ':key' => $key, ':now' => $now]);
+        /** @var array{value: string, value_type: int}|false $row */
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
+        if ($row === false) {
+            return null;
+        }
+        if ((int) $row['value_type'] !== Schema::TYPE_JSON) {
+            throw self::wrongType($key, (int) $row['value_type'], null);
+        }
+        try {
+            [$obj, $root] = JsonObject::parse($row['value']);
+        } catch (\JsonException) {
+            throw self::wrongType($key, Schema::TYPE_JSON, null);
+        }
+        if ($obj === null) {
+            throw self::wrongType($key, Schema::TYPE_JSON, $root);
+        }
+
+        return $obj;
+    }
+
+    /**
+     * Fallback path: read, mutate in PHP, write back -- all under BEGIN
+     * IMMEDIATE. $mutate returns [changed, result].
+     *
+     * @param  callable(JsonObject): array{0: bool, 1: mixed}  $mutate
+     */
+    private function rmwHash(string $key, ?float $ttl, bool $create, callable $mutate): mixed
+    {
+        $now = self::nowMillis();
+        $result = null;
+        $wrote = false;
+        $this->inWriteTransaction(function () use ($key, $ttl, $create, $mutate, $now, &$result, &$wrote) {
+            $wrote = false;
+            $doc = $this->loadHash($key, $now);
+            $exists = $doc !== null;
+            if ($doc === null) {
+                if (! $create) {
+                    $result = $mutate(new JsonObject)[1];
+
+                    return;
+                }
+                if ($this->eviction === Eviction::NoEviction && ($this->maxKeys !== null || $this->maxBytes !== null)) {
+                    $this->checkCapacity($key);
+                }
+                $doc = new JsonObject;
+            }
+            [$changed, $result] = $mutate($doc);
+            if (! $changed) {
+                return;
+            }
+            $blob = $doc->toJson();
+            $params = $this->hashParams($key, $now, $ttl) + [':v' => new Bytes($blob), ':size' => strlen($blob)];
+            if ($exists) {
+                $this->run('UPDATE cache SET value = :v, size_bytes = :size, last_accessed = :now, access_count = access_count + 1 '
+                    .'WHERE namespace = :ns AND key = :key', $params);
+            } else {
+                $this->run('INSERT OR REPLACE INTO cache (key, namespace, value, value_type, created_at, expires_at, last_accessed, '
+                    .'access_count, size_bytes) VALUES (:key, :ns, :v, 4, :now, :exp, :now, 0, :size)', $params);
+            }
+            $wrote = true;
+        });
+        if ($wrote) {
+            $this->changed('set', [$key], 1);
+            $this->maybeEvict();
+        }
+
+        return $result;
+    }
+
+    /**
+     * Encodes one field value as compact JSON text, with the same rules as
+     * stored JSON values. {@see Bytes} is rejected, as are NAN/INF.
+     */
+    private static function encodeHashValue(mixed $value): string
+    {
+        if ($value instanceof Bytes) {
+            throw new SerializationException('lytecache: hash fields hold JSON values; Bytes is not supported');
+        }
+        if (is_float($value) && (is_nan($value) || is_infinite($value))) {
+            throw new SerializationException('lytecache: cannot store NAN or INF in a hash field');
+        }
+        if (is_string($value) || is_int($value) || is_float($value)) {
+            try {
+                return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+            } catch (\JsonException $e) {
+                throw new SerializationException('lytecache: cannot encode hash field: '.$e->getMessage(), previous: $e);
+            }
+        }
+        [$json] = Serializer::encode($value);
+
+        return $json;
+    }
+
+    private static function decodeHashValue(string $json): mixed
+    {
+        try {
+            return json_decode($json, associative: true, flags: JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            throw new SerializationException('lytecache: stored hash field is not valid JSON: '.$e->getMessage(), previous: $e);
+        }
+    }
+
+    private function capacityCheckFor(string $key): void
+    {
+        if ($this->eviction === Eviction::NoEviction && ($this->maxKeys !== null || $this->maxBytes !== null)) {
+            $this->checkCapacity($key);
+        }
+    }
+
+    /**
+     * Atomically sets one field of the JSON object at $key. Returns true if
+     * the field was new, false if it replaced a value. A missing (or expired)
+     * key is created as a new object with NO expiry unless $ttl is given;
+     * $ttl is ignored for an existing key, whose expiry a field write never
+     * changes. Throws {@see SerializationException} if $key holds anything
+     * but a JSON object.
+     */
+    public function hset(string $key, string $field, mixed $value, ?float $ttl = null): bool
+    {
+        $this->assertOpen();
+        $encoded = self::encodeHashValue($value);
+        if (! $this->json1) {
+            return (bool) $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($field, $encoded): array {
+                $created = ! $doc->has($field);
+                $doc->set($field, $encoded);
+
+                return [true, $created];
+            });
+        }
+        $this->capacityCheckFor($key);
+        $now = self::nowMillis();
+        $params = $this->hashParams($key, $now, $ttl) + [':f0' => $field, ':v0' => $encoded];
+        $setExpr = 'json_set('.self::DOC.', '.self::jsonPath('f0').', json(:v0))';
+        $created = false;
+        $this->inWriteTransaction(function () use ($params, $setExpr, $key, $now, &$created) {
+            $created = $this->run(self::upsertHashSql($setExpr, 'json_object(:f0, json(:v0))',
+                '('.self::fieldType('f0').' IS NULL AND '.self::IS_OBJ.')'), $params)->rowCount() === 1;
+            if ($created) {
+                return;
+            }
+            $n = $this->run("UPDATE cache SET value = CAST({$setExpr} AS BLOB), size_bytes = length(CAST({$setExpr} AS BLOB)), "
+                .'last_accessed = :now, access_count = access_count + 1 WHERE namespace = :ns AND key = :key AND '.self::LIVE
+                .' AND '.self::IS_OBJ, $params)->rowCount();
+            if ($n === 0) {
+                $this->checkHashType($key, $now);
+            }
+        });
+        $this->changed('set', [$key], 1);
+        $this->maybeEvict();
+        $this->maybeMaintain();
+
+        return $created;
+    }
+
+    /** Sets $field only if it is absent, atomically; returns whether it was set. */
+    public function hsetnx(string $key, string $field, mixed $value, ?float $ttl = null): bool
+    {
+        $this->assertOpen();
+        $encoded = self::encodeHashValue($value);
+        if (! $this->json1) {
+            return (bool) $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($field, $encoded): array {
+                if ($doc->has($field)) {
+                    return [false, false];
+                }
+                $doc->set($field, $encoded);
+
+                return [true, true];
+            });
+        }
+        $this->capacityCheckFor($key);
+        $now = self::nowMillis();
+        $params = $this->hashParams($key, $now, $ttl) + [':f0' => $field, ':v0' => $encoded];
+        $won = false;
+        $this->inWriteTransaction(function () use ($params, $key, $now, &$won) {
+            $won = $this->run(self::upsertHashSql('json_set('.self::DOC.', '.self::jsonPath('f0').', json(:v0))', 'json_object(:f0, json(:v0))',
+                '('.self::fieldType('f0').' IS NULL AND '.self::IS_OBJ.')'), $params)->rowCount() === 1;
+            if (! $won) {
+                $this->checkHashType($key, $now);
+            }
+        });
+        if ($won) {
+            $this->changed('set', [$key], 1);
+            $this->maybeEvict();
+        }
+
+        return $won;
+    }
+
+    /**
+     * Sets several fields at once, atomically (Redis' multi-field HSET): all
+     * land in one transaction or none do.
+     *
+     * @param  array<string, mixed>  $fields
+     */
+    public function hsetMany(string $key, array $fields, ?float $ttl = null): void
+    {
+        $this->assertOpen();
+        $entries = [];
+        foreach ($fields as $f => $v) {
+            $entries[] = [(string) $f, self::encodeHashValue($v)];
+        }
+        if ($entries === []) {
+            return;
+        }
+        if (! $this->json1) {
+            $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($entries): array {
+                foreach ($entries as [$f, $v]) {
+                    $doc->set($f, $v);
+                }
+
+                return [true, null];
+            });
+
+            return;
+        }
+        $this->capacityCheckFor($key);
+        $now = self::nowMillis();
+        $this->inWriteTransaction(function () use ($entries, $key, $now, $ttl) {
+            // SQLite caps function arguments and bound variables, so a large
+            // mapping is applied as several statements -- each json_set
+            // nested over groups of pairs -- inside this one transaction.
+            for ($start = 0; $start < count($entries); $start += self::HSET_MANY_PER_STATEMENT) {
+                $end = min($start + self::HSET_MANY_PER_STATEMENT, count($entries));
+                $params = $this->hashParams($key, $now, $ttl);
+                $liveDoc = self::DOC;
+                $freshDoc = "'{}'";
+                for ($g = $start; $g < $end; $g += self::JSON_SET_PAIRS) {
+                    $pairs = [];
+                    for ($i = $g; $i < min($g + self::JSON_SET_PAIRS, $end); $i++) {
+                        $params[":f{$i}"] = $entries[$i][0];
+                        $params[":v{$i}"] = $entries[$i][1];
+                        $pairs[] = self::jsonPath("f{$i}").", json(:v{$i})";
+                    }
+                    $joined = implode(', ', $pairs);
+                    $liveDoc = "json_set({$liveDoc}, {$joined})";
+                    $freshDoc = "json_set({$freshDoc}, {$joined})";
+                }
+                if ($this->run(self::upsertHashSql($liveDoc, $freshDoc, self::IS_OBJ), $params)->rowCount() === 0) {
+                    $this->checkHashType($key, $now);
+                }
+            }
+        });
+        $this->changed('set', [$key], 1);
+        $this->maybeEvict();
+    }
+
+    /**
+     * One field's JSON text per requested field (null where missing), or
+     * null for a missing key.
+     *
+     * @param  list<string>  $fields
+     * @return list<string|null>|null
+     */
+    private function hmgetRaw(string $key, array $fields): ?array
+    {
+        $this->assertOpen();
+        $now = self::nowMillis();
+        if (! $this->json1) {
+            $doc = $this->loadHash($key, $now);
+            $this->recordHashRead($key, $now, $doc !== null);
+
+            return $doc === null ? null : array_map(static fn (string $f): ?string => $doc->get($f), $fields);
+        }
+        $params = [':ns' => $this->namespace, ':key' => $key, ':now' => $now];
+        $cols = [];
+        foreach ($fields as $i => $f) {
+            $params[":f{$i}"] = $f;
+            $cols[] = 'CASE WHEN '.self::IS_OBJ.' THEN '.self::DOC.' -> '.self::jsonPath("f{$i}")." END AS c{$i}";
+        }
+        $stmt = $this->run('SELECT cache.value_type AS vt, '.self::ROOT_TYPE.' AS root, '.implode(', ', $cols)
+            .' FROM cache WHERE namespace = :ns AND key = :key AND '.self::LIVE, $params);
+        /** @var array<string, mixed>|false $row */
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
+        if ($row === false) {
+            $this->recordHashRead($key, $now, false);
+
+            return null;
+        }
+        if (! ((int) $row['vt'] === Schema::TYPE_JSON && $row['root'] === 'object')) {
+            throw self::wrongType($key, (int) $row['vt'], is_string($row['root']) ? $row['root'] : null);
+        }
+        $this->recordHashRead($key, $now, true);
+        $out = [];
+        foreach (array_keys($fields) as $i) {
+            $v = $row["c{$i}"];
+            $out[] = is_string($v) ? $v : null;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Returns one field of the JSON object at $key (JSON objects decode to
+     * arrays, as with get()), or $default on a missing key, missing field or
+     * expired key -- never throws on a miss. A stored JSON null is returned
+     * as null.
+     */
+    public function hget(string $key, string $field, mixed $default = null): mixed
+    {
+        $raw = $this->hmgetRaw($key, [$field]);
+        $v = $raw[0] ?? null;
+
+        return $v === null ? $default : self::decodeHashValue($v);
+    }
+
+    /**
+     * Several fields, in order, with null for each one that is missing.
+     *
+     * @param  list<string>  $fields
+     * @return list<mixed>
+     */
+    public function hmget(string $key, array $fields): array
+    {
+        if ($fields === []) {
+            return [];
+        }
+        $raw = $this->hmgetRaw($key, $fields);
+
+        return array_map(static fn (?string $v): mixed => $v === null ? null : self::decodeHashValue($v), $raw ?? array_fill(0, count($fields), null));
+    }
+
+    /**
+     * The whole object at $key, in document order ([] if missing).
+     *
+     * @return array<string, mixed>
+     */
+    public function hgetAll(string $key): array
+    {
+        $out = [];
+        foreach ($this->hashEntries($key, true) as [$k, $v]) {
+            $out[$k] = self::decodeHashValue($v);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Removes fields; returns how many were present and removed. Unlike
+     * Redis, removing the last field leaves an empty object {} rather than
+     * deleting the key. A missing key returns 0.
+     */
+    public function hdel(string $key, string ...$fields): int
+    {
+        $this->assertOpen();
+        $unique = array_values(array_unique($fields));
+        if ($unique === []) {
+            return 0;
+        }
+        if (! $this->json1) {
+            return (int) $this->rmwHash($key, null, false, static function (JsonObject $doc) use ($unique): array {
+                $n = 0;
+                foreach ($unique as $f) {
+                    $n += $doc->delete($f) ? 1 : 0;
+                }
+
+                return [$n > 0, $n];
+            });
+        }
+        $now = self::nowMillis();
+        $remove = 'json_remove('.self::DOC.', '.self::jsonPath('f0').')';
+        $sql = "UPDATE cache SET value = CAST({$remove} AS BLOB), size_bytes = length(CAST({$remove} AS BLOB)), last_accessed = :now, "
+            .'access_count = access_count + :bump WHERE namespace = :ns AND key = :key AND '.self::LIVE.' AND '.self::fieldType('f0').' IS NOT NULL';
+        $removed = 0;
+        $this->inWriteTransaction(function () use ($unique, $sql, $key, $now, &$removed) {
+            $removed = 0;
+            foreach ($unique as $f) {
+                // One hdel call is one access, however many statements it takes.
+                $removed += $this->run($sql, [':ns' => $this->namespace, ':key' => $key, ':now' => $now, ':f0' => $f,
+                    ':bump' => $removed === 0 ? 1 : 0])->rowCount();
+            }
+            if ($removed === 0) {
+                $this->checkHashType($key, $now);
+            }
+        });
+        if ($removed > 0) {
+            $this->changed('set', [$key], 1);
+        }
+
+        return $removed;
+    }
+
+    /** Whether $key is a live JSON object containing $field. */
+    public function hexists(string $key, string $field): bool
+    {
+        $raw = $this->hmgetRaw($key, [$field]);
+
+        return $raw !== null && $raw[0] !== null;
+    }
+
+    /**
+     * Field names in document order ([] if missing).
+     *
+     * @return list<string>
+     */
+    public function hkeys(string $key): array
+    {
+        return array_map(static fn (array $e): string => $e[0], $this->hashEntries($key, false));
+    }
+
+    /**
+     * Field values in document order ([] if missing).
+     *
+     * @return list<mixed>
+     */
+    public function hvals(string $key): array
+    {
+        return array_map(static fn (array $e): mixed => self::decodeHashValue($e[1]), $this->hashEntries($key, true));
+    }
+
+    /** Number of fields (0 if missing). */
+    public function hlen(string $key): int
+    {
+        return count($this->hashEntries($key, false));
+    }
+
+    /**
+     * @return list<array{0: string, 1: string}>
+     */
+    private function hashEntries(string $key, bool $withValues): array
+    {
+        $this->assertOpen();
+        $now = self::nowMillis();
+        if (! $this->json1) {
+            $doc = $this->loadHash($key, $now);
+            if ($doc !== null) {
+                $this->bufferLru($key, $now);
+            }
+
+            return $doc === null ? [] : $doc->fields;
+        }
+        $valueCol = $withValues ? 'CASE WHEN j.key IS NOT NULL THEN '.self::DOC.' -> j.fullkey END' : 'NULL';
+        $stmt = $this->run('SELECT cache.value_type AS vt, '.self::ROOT_TYPE." AS root, j.key AS k, {$valueCol} AS v FROM cache "
+            .'LEFT JOIN json_each(CASE WHEN '.self::IS_OBJ.' THEN '.self::DOC." ELSE '{}' END) AS j "
+            .'WHERE cache.namespace = :ns AND cache.key = :key AND '.self::LIVE, [':ns' => $this->namespace, ':key' => $key, ':now' => $now]);
+        /** @var list<array{vt: int, root: string|null, k: string|null, v: string|null}> $rows */
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        if ($rows === []) {
+            return [];
+        }
+        if (! ((int) $rows[0]['vt'] === Schema::TYPE_JSON && $rows[0]['root'] === 'object')) {
+            throw self::wrongType($key, (int) $rows[0]['vt'], $rows[0]['root']);
+        }
+        $this->bufferLru($key, $now);
+        $out = [];
+        foreach ($rows as $r) {
+            if ($r['k'] !== null) {
+                $out[] = [(string) $r['k'], $r['v'] ?? 'null'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Atomically adds $amount to an integer field and returns the new value.
+     * A missing field starts at 0; a missing key is created (no expiry unless
+     * $ttl). Throws {@see NotNumericException} if the field holds anything
+     * but a JSON integer, and \OverflowException -- writing nothing -- if the
+     * result would leave the signed 64-bit range.
+     */
+    public function hincrBy(string $key, string $field, int $amount = 1, ?float $ttl = null): int
+    {
+        return (int) $this->hincr($key, $field, $amount, $ttl, true);
+    }
+
+    /** Atomically adds $amount to a numeric field and returns the new value, stored as a float. */
+    public function hincrByFloat(string $key, string $field, float $amount, ?float $ttl = null): float
+    {
+        if (is_nan($amount) || is_infinite($amount)) {
+            throw new \InvalidArgumentException('lytecache: hincrByFloat amount must be finite');
+        }
+
+        return (float) $this->hincr($key, $field, $amount, $ttl, false);
+    }
+
+    private function hincr(string $key, string $field, int|float $amount, ?float $ttl, bool $integer): string
+    {
+        $this->assertOpen();
+        $kind = $integer ? 'an integer' : 'a number';
+        if (! $this->json1) {
+            return (string) $this->rmwHash($key, $ttl, true, static function (JsonObject $doc) use ($field, $amount, $integer, $kind, $key): array {
+                $raw = trim($doc->get($field) ?? '0');
+                if ($integer) {
+                    if (preg_match('/^-?\d+$/', $raw) !== 1) {
+                        throw new NotNumericException("lytecache: hash field \"{$field}\" of key \"{$key}\" is not {$kind}");
+                    }
+                    $cur = filter_var($raw, FILTER_VALIDATE_INT);
+                    if ($cur === false) {
+                        throw new \OverflowException("lytecache: incrementing field \"{$field}\" of key \"{$key}\" would overflow");
+                    }
+                    $add = (int) $amount;
+                    if (($add > 0 && $cur > PHP_INT_MAX - $add) || ($add < 0 && $cur < PHP_INT_MIN - $add)) {
+                        throw new \OverflowException("lytecache: incrementing field \"{$field}\" of key \"{$key}\" would overflow");
+                    }
+                    $next = $cur + $add;
+                    $doc->set($field, (string) $next);
+
+                    return [true, (string) $next];
+                }
+                if (! is_numeric($raw)) {
+                    throw new NotNumericException("lytecache: hash field \"{$field}\" of key \"{$key}\" is not {$kind}");
+                }
+                $next = (float) $raw + (float) $amount;
+                if (is_infinite($next)) {
+                    throw new \OverflowException("lytecache: incrementing field \"{$field}\" of key \"{$key}\" would overflow");
+                }
+                $text = json_encode($next, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+                $doc->set($field, $text);
+
+                return [true, $text];
+            });
+        }
+        $this->capacityCheckFor($key);
+        $now = self::nowMillis();
+        $params = $this->hashParams($key, $now, $ttl) + [':f0' => $field, ':amount' => $integer ? (int) $amount : json_encode((float) $amount, JSON_THROW_ON_ERROR)];
+        // PDO has no float binding, so the float amount travels as text and is CAST here.
+        $amountSql = $integer ? ':amount' : 'CAST(:amount AS REAL)';
+        $stored = 'json_extract('.self::DOC.', '.self::jsonPath('f0').')';
+        $newVal = $integer ? "(COALESCE({$stored}, 0) + {$amountSql})" : "(CAST(COALESCE({$stored}, 0) AS REAL) + {$amountSql})";
+        $guard = $integer
+            ? 'COALESCE('.self::fieldType('f0').", 'integer') = 'integer' AND typeof({$newVal}) = 'integer'"
+            : 'COALESCE('.self::fieldType('f0').", 'real') IN ('integer', 'real') AND {$newVal} BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308";
+        $storedVal = $integer ? $newVal : 'json('.self::floatText($newVal).')';
+        $sql = self::upsertHashSql('json_set('.self::DOC.', '.self::jsonPath('f0').", {$storedVal})", "json_object(:f0, {$amountSql})",
+            '(CASE WHEN '.self::IS_OBJ." THEN ({$guard}) ELSE 0 END)")
+            .' RETURNING CAST(json_extract(CAST(value AS TEXT), '.self::jsonPath('f0').') AS TEXT) AS r'
+            .($integer ? '' : ', json_extract(CAST(value AS TEXT), '.self::jsonPath('f0').') AS real_value');
+        $result = '';
+        $this->inWriteTransaction(function () use ($sql, $params, $integer, $kind, $field, $key, $now, &$result) {
+            $stmt = $this->run($sql, $params);
+            /** @var array{r: string, real_value?: float}|false $row */
+            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+            $stmt->closeCursor();
+            if ($row !== false) {
+                // Floats come back as the REAL itself: CAST(real AS TEXT) keeps only 15 digits.
+                $result = $integer ? (string) $row['r'] : json_encode((float) ($row['real_value'] ?? 0.0), JSON_THROW_ON_ERROR);
+
+                return;
+            }
+            $this->checkHashType($key, $now);
+            $ftStmt = $this->run('SELECT '.self::fieldType('f0').' AS t FROM cache WHERE namespace = :ns AND key = :key', $params);
+            $ft = $ftStmt->fetchColumn();
+            $ftStmt->closeCursor();
+            if (($integer && $ft === 'integer') || (! $integer && ($ft === 'integer' || $ft === 'real'))) {
+                throw new \OverflowException("lytecache: incrementing field \"{$field}\" of key \"{$key}\" would overflow");
+            }
+            throw new NotNumericException("lytecache: hash field \"{$field}\" of key \"{$key}\" holds a JSON {$ft}, not {$kind}");
+        });
+        $this->changed('set', [$key], 1);
+        $this->maybeEvict();
+
+        return $result;
+    }
+
+    private function recordHashRead(string $key, int $now, bool $found): void
+    {
+        if ($found) {
+            $this->hits++;
+            $this->bufferLru($key, $now);
+        } else {
+            $this->misses++;
+        }
+        $this->maybeMaintain();
+    }
+
+    // ---------------------------------------------------------------
+    // Events: local notification (notify / watch)
+    // ---------------------------------------------------------------
+    //
+    // SINGLE HOST ONLY. POLLED, NOT PUSHED. DURABLE. Not Redis Pub/Sub:
+    // events are rows in the `events` table with a monotonic seq; watchers
+    // on the same machine poll it. See docs/notifications.md.
+
+    private const CACHE_CHANNEL = '__cache__';
+
+    private const EVENTS_DDL = <<<'SQL'
+        CREATE TABLE IF NOT EXISTS events (
+          seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+          channel    TEXT    NOT NULL,
+          namespace  TEXT    NOT NULL DEFAULT 'default',
+          payload    BLOB,
+          value_type INTEGER NOT NULL DEFAULT 4,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_seq_channel ON events(channel, seq);
+        CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+        INSERT OR IGNORE INTO meta (k, v) VALUES ('events_version', '1');
+        SQL;
+
+    private const CHANGE_OPS = ['set', 'delete', 'flush'];
+
+    private const MAX_DISPATCH_DEPTH = 8;
+
+    private function ensureEvents(): void
+    {
+        if ($this->eventsReady) {
+            return;
+        }
+        $this->executeWithRetry(fn () => $this->pdo->exec(self::EVENTS_DDL));
+        $this->eventsReady = true;
+    }
+
+    private function eventsExist(): bool
+    {
+        if (! $this->eventsReady) {
+            $this->eventsReady = self::query($this->pdo, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")->fetchColumn() !== false;
+        }
+
+        return $this->eventsReady;
+    }
+
+    private static function validateChannel(string $channel): void
+    {
+        if ($channel === '') {
+            throw new \InvalidArgumentException('lytecache: channel must be non-empty');
+        }
+        if (str_contains($channel, '*')) {
+            throw new \InvalidArgumentException("lytecache: channel \"{$channel}\" may not contain '*' (reserved for watch patterns)");
+        }
+        if (str_starts_with($channel, '__')) {
+            throw new \InvalidArgumentException("lytecache: channel names starting with '__' are reserved: \"{$channel}\"");
+        }
+    }
+
+    /**
+     * Publishes an event for watchers ON THIS HOST and returns its seq.
+     * Single host only, delivered by polling (not pushed), durable until
+     * retention deletes it ($eventRetention, default 1 hour). $payload is
+     * encoded exactly like a cached value. Each call is one write under the
+     * same lock as set(), so a high event rate slows cache writes; batch with
+     * notifyMany(). Call it after your own database transaction commits,
+     * never inside one you might roll back.
+     */
+    public function notify(string $channel, mixed $payload = null): int
+    {
+        $this->assertOpen();
+        self::validateChannel($channel);
+
+        return $this->insertEvents([[$channel, $payload]])[0];
+    }
+
+    /**
+     * Publishes several [channel, payload] events in one transaction.
+     *
+     * @param  list<array{0: string, 1: mixed}>  $events
+     * @return list<int> their seqs, in order
+     */
+    public function notifyMany(array $events): array
+    {
+        $this->assertOpen();
+        foreach ($events as [$channel]) {
+            self::validateChannel($channel);
+        }
+
+        return $events === [] ? [] : $this->insertEvents($events);
+    }
+
+    /**
+     * @param  list<array{0: string, 1: mixed}>  $events
+     * @return list<int>
+     */
+    private function insertEvents(array $events): array
+    {
+        $now = self::nowMillis();
+        $rows = [];
+        foreach ($events as [$channel, $payload]) {
+            [$data, $type] = $payload === null ? ['null', Schema::TYPE_JSON] : Serializer::encode($payload);
+            $rows[] = [$channel, $data, $type];
+        }
+        $this->ensureEvents();
+        $seqs = [];
+        $this->inWriteTransaction(function () use ($rows, $now, &$seqs) {
+            $seqs = [];
+            foreach ($rows as [$channel, $data, $type]) {
+                $stmt = $this->run('INSERT INTO events (channel, namespace, payload, value_type, created_at) '
+                    .'VALUES (:ch, :ns, :p, :t, :now) RETURNING seq',
+                    [':ch' => $channel, ':ns' => $this->namespace, ':p' => new Bytes($data), ':t' => $type, ':now' => $now]);
+                $seqs[] = (int) $stmt->fetchColumn();
+                $stmt->closeCursor(); // a RETURNING row left unread would block COMMIT
+            }
+        });
+        // In-process optimization only: skip this cache's watchers' remaining backoff.
+        foreach ($this->subscriptions as $sub) {
+            $sub->wake();
+        }
+
+        return $seqs;
+    }
+
+    /**
+     * Subscribes to events published ON THIS HOST to matching channels:
+     * exact names, or a trailing '*' for a prefix ("cache:invalidate:*");
+     * "*" matches every channel. Only events from this cache's namespace are
+     * seen. $fromSeq: null for only new events, N to resume after seq N, 0
+     * to replay everything retained. Delivery is at-least-once, in total seq
+     * order, to every subscriber (fan-out) -- handlers must be idempotent.
+     * Lost events throw {@see GapException}.
+     *
+     * @param  string|list<string>  $channels
+     */
+    public function watch(string|array $channels, ?int $fromSeq = null, float $pollInterval = 0.05): Subscription
+    {
+        $this->assertOpen();
+        $patterns = is_string($channels) ? [$channels] : $channels;
+        if ($patterns === []) {
+            throw new \InvalidArgumentException('lytecache: watch() needs at least one channel or pattern');
+        }
+        $ignored = [];
+        Subscription::channelFilter($patterns, $ignored); // validates
+        if ($fromSeq !== null && $fromSeq < 0) {
+            throw new \InvalidArgumentException('lytecache: fromSeq must be >= 0');
+        }
+        if ($pollInterval <= 0) {
+            throw new \InvalidArgumentException('lytecache: pollInterval must be positive');
+        }
+        $this->ensureEvents();
+        $gap = null;
+        $this->pdo->exec('BEGIN');
+        try {
+            if ($fromSeq === null) {
+                $start = Subscription::lastAssignedSeq($this->pdo);
+            } elseif ($fromSeq === 0) {
+                $oldest = Subscription::oldestSeq($this->pdo);
+                $start = $oldest !== null ? $oldest - 1 : Subscription::lastAssignedSeq($this->pdo);
+            } else {
+                $start = $fromSeq;
+                $gap = Subscription::gapCheck($this->pdo, $start);
+            }
+        } finally {
+            $this->pdo->exec('COMMIT');
+        }
+        $sub = new Subscription($this->path, $this->namespace, $patterns, $start, $gap, $pollInterval,
+            function (Subscription $s): void {
+                $this->subscriptions = array_values(array_filter($this->subscriptions, static fn ($x) => $x !== $s));
+            });
+        $this->subscriptions[] = $sub;
+
+        return $sub;
+    }
+
+    /**
+     * Persists a named subscriber cursor (in the meta table). Save an
+     * event's seq after you have finished handling it, then resume with
+     * watch(..., fromSeq: $cache->loadCursor($name)). Each save is a write:
+     * on a busy stream save every N events, accepting up to N redeliveries.
+     */
+    public function saveCursor(string $name, int $seq): void
+    {
+        $this->assertOpen();
+        $stmt = $this->prepare('INSERT INTO meta (k, v) VALUES (:k, :v) ON CONFLICT(k) DO UPDATE SET v = excluded.v');
+        $this->executeWithRetry(fn () => $stmt->execute([':k' => "cursor:{$this->namespace}:{$name}", ':v' => (string) $seq]));
+    }
+
+    /** The cursor last saved under $name, or null. */
+    public function loadCursor(string $name): ?int
+    {
+        $this->assertOpen();
+        $stmt = $this->prepare('SELECT v FROM meta WHERE k = :k');
+        $stmt->execute([':k' => "cursor:{$this->namespace}:{$name}"]);
+        $v = $stmt->fetchColumn();
+        $stmt->closeCursor();
+
+        return $v === false ? null : (int) $v;
+    }
+
+    /**
+     * Retention in bounded batches. Always deletes a prefix of the seq range
+     * (everything up to the newest event past retention or beyond the count
+     * cap), never a hole, which keeps gap detection sound even if clocks
+     * disagree.
+     */
+    private function sweepEvents(): void
+    {
+        if (! $this->eventsExist()) {
+            return;
+        }
+        $bounds = [];
+        $stmt = $this->run('SELECT max(seq) FROM events WHERE created_at <= :cut', [':cut' => self::nowMillis() - (int) round($this->eventRetention * 1000)]);
+        $byAge = $stmt->fetchColumn();
+        $stmt->closeCursor();
+        if ($byAge !== null && $byAge !== false) {
+            $bounds[] = (int) $byAge;
+        }
+        if ($this->eventMaxCount !== null) {
+            $stmt = $this->run('SELECT seq FROM events ORDER BY seq DESC LIMIT 1 OFFSET :n', [':n' => $this->eventMaxCount]);
+            $byCount = $stmt->fetchColumn();
+            $stmt->closeCursor();
+            if ($byCount !== false && $byCount !== null) {
+                $bounds[] = (int) $byCount;
+            }
+        }
+        if ($bounds === []) {
+            return;
+        }
+        $bound = max($bounds);
+        do {
+            $n = $this->executeWithRetry(fn () => $this->run('DELETE FROM events WHERE seq IN (SELECT seq FROM events WHERE seq <= :b ORDER BY seq LIMIT :lim)',
+                [':b' => $bound, ':lim' => self::MAINTENANCE_BATCH])->rowCount());
+        } while ($n >= self::MAINTENANCE_BATCH);
+    }
+
+    // ---------------------------------------------------------------
+    // Change listeners (in-process) and auto-publish
+    // ---------------------------------------------------------------
+
+    /**
+     * Calls $listener(ChangeRecord) after mutations in THIS PROCESS commit.
+     * In-process only, no SQLite involvement. PHP has no threads, so
+     * listeners run synchronously right after the mutating call's COMMIT --
+     * never inside the transaction, never holding the write lock -- which
+     * means a rolled-back setMany() notifies nobody and a listener may write
+     * to the cache itself. A throwing listener is logged and skipped; the
+     * write already committed. Writes made by listeners can trigger
+     * listeners again; past 8 levels those records are dropped with a
+     * warning. Bulk operations produce ONE record. Returns an unsubscribe
+     * closure.
+     *
+     * "set" covers every write that changes a value (set, setMany, add,
+     * replace, getSet, counters, hash writes); "delete" is delete(); "flush"
+     * is flush(). TTL expiry and eviction are not reported.
+     *
+     * @param  callable(ChangeRecord): mixed  $listener
+     * @param  list<string>  $events  any of "set", "delete", "flush"
+     */
+    public function onChange(callable $listener, array $events = self::CHANGE_OPS): \Closure
+    {
+        $this->assertOpen();
+        foreach ($events as $op) {
+            if (! in_array($op, self::CHANGE_OPS, true)) {
+                throw new \InvalidArgumentException("lytecache: unknown change operation \"{$op}\"");
+            }
+        }
+        if ($events === []) {
+            throw new \InvalidArgumentException('lytecache: onChange events must not be empty');
+        }
+        $id = $this->nextListenerId++;
+        $this->listeners[$id] = [$listener(...), $events];
+
+        return function () use ($id): void {
+            unset($this->listeners[$id]);
+        };
+    }
+
+    /**
+     * Called after a mutation commits. With no listeners and no
+     * publishChanges it returns immediately: the zero-cost common case.
+     *
+     * @param  'set'|'delete'|'flush'  $op
+     * @param  list<string>|null  $keys
+     */
+    private function changed(string $op, ?array $keys, int $count): void
+    {
+        $publish = in_array($op, $this->publishChanges, true);
+        if ($this->listeners === [] && ! $publish) {
+            return;
+        }
+        $truncated = $keys === null || count($keys) > $this->changeKeyCap;
+        $record = new ChangeRecord($op, $this->namespace, $truncated ? null : $keys, $count, $truncated);
+        if ($publish) {
+            try {
+                $this->insertEvents([[self::CACHE_CHANNEL, $record->toArray()]]);
+            } catch (\Throwable $e) {
+                if ($this->strict) {
+                    throw $e;
+                }
+                ($this->logger)("lytecache: failed to publish {$op} change event: ".$e->getMessage());
+            }
+        }
+        if ($this->listeners === []) {
+            return;
+        }
+        if ($this->dispatchDepth >= self::MAX_DISPATCH_DEPTH) {
+            ($this->logger)("lytecache: dropping {$op} change record: onChange listeners re-entered the cache ".self::MAX_DISPATCH_DEPTH.' levels deep');
+
+            return;
+        }
+        $this->dispatchDepth++;
+        try {
+            foreach (array_keys($this->listeners) as $id) {
+                if (! array_key_exists($id, $this->listeners)) {
+                    continue; // unsubscribed meanwhile: never called again
+                }
+                $entry = $this->listeners[$id];
+                if (! in_array($op, $entry[1], true)) {
+                    continue;
+                }
+                try {
+                    ($entry[0])($record);
+                } catch (\Throwable $e) {
+                    ($this->logger)('lytecache: onChange listener threw: '.$e->getMessage());
+                }
+            }
+        } finally {
+            $this->dispatchDepth--;
+        }
     }
 
     // ---------------------------------------------------------------
@@ -991,6 +2164,9 @@ final class LyteCache
         $stmt = $this->prepare('DELETE FROM cache WHERE namespace = :ns');
         $stmt->execute([':ns' => $this->namespace]);
         $this->lruBuffer = [];
+        if ($stmt->rowCount() > 0) {
+            $this->changed('flush', null, $stmt->rowCount());
+        }
     }
 
     public function stats(): CacheStats
@@ -1016,6 +2192,7 @@ final class LyteCache
             evictions: $this->evictions,
             expiredRemoved: $this->expiredRemoved,
             path: $this->path,
+            hashMode: $this->hashMode(),
         );
     }
 
@@ -1037,6 +2214,10 @@ final class LyteCache
             return;
         }
 
+        foreach ($this->subscriptions as $sub) {
+            $sub->close();
+        }
+        $this->listeners = [];
         $this->flushLruBuffer();
         $this->stmtCache = [];
         // PDO has no explicit close() method; dropping the last reference
@@ -1068,6 +2249,7 @@ final class LyteCache
         $this->flushLruBuffer();
         $this->removeExpiredBatch();
         $this->enforceCapacity();
+        $this->sweepEvents();
         $this->lastMaintenanceAt = microtime(true);
     }
 
@@ -1301,7 +2483,7 @@ final class LyteCache
         $deadline = microtime(true) + $timeout;
 
         while (true) {
-            if ($this->add($lockKey, $token, $timeout)) {
+            if ($this->addInternal($lockKey, $token, $timeout, false)) {
                 return new CacheLock($this, $name, $token);
             }
 

@@ -63,7 +63,12 @@ func buildCommandTree(flags *globalFlags) *cobra.Command {
 		newVacuumCmd(flags),
 		newWhichCmd(flags),
 		newDumpCmd(flags),
-		newWatchCmd(flags),
+		newEventsWatchCmd(flags),
+		newNotifyCmd(flags),
+		newEventsCmd(flags),
+		newHGetCmd(flags),
+		newHGetAllCmd(flags),
+		newHSetCmd(flags),
 		newUICmd(flags),
 		newServiceCmd(),
 	)

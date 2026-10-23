@@ -21,6 +21,8 @@ func (s *Server) routes() *http.ServeMux {
 	s.handle(mux, "GET /db/{db}", s.handleDBRedirect)
 	s.handle(mux, "GET /db/{db}/namespaces/{ns}/keys", s.handleKeys)
 	s.handle(mux, "GET /db/{db}/namespaces/{ns}/keys/{key...}", s.handleKeyDetail)
+	s.handle(mux, "GET /db/{db}/events", s.handleEvents) // tail, retention, lag; nothing publishes
+	s.handle(mux, "GET /db/{db}/events/{seq}", s.handleEventDetail)
 	s.handle(mux, "GET /search", s.handleSearch)
 	s.handle(mux, "GET /healthz", s.handleHealthz)
 

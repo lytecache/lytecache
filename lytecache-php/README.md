@@ -76,8 +76,73 @@ php artisan vendor:publish --tag=lytecache-config
 | `remember($key, $ttl, $loader)` | Read-through cache for a computed value. |
 | `lock($name, $timeout = 30.0)` | Process-safe distributed lock; release via `$lock->release()` or `$lock->block($callback)`. |
 | `maintain()` | Run maintenance (expired-row cleanup) immediately; see below. |
+| `hset($key, $field, $value, ttl: null)` / `hsetMany` / `hsetnx` | Atomically set field(s) of a JSON object value. See [Hashes](#hashes). |
+| `hget($key, $field, $default)` / `hmget` / `hgetAll` | Read fields without decoding the rest of the document. |
+| `hdel` / `hexists` / `hkeys` / `hvals` / `hlen` | Remove, test or list fields. |
+| `hincrBy($key, $field, $n)` / `hincrByFloat` | Atomic counters inside a JSON object. |
+| `notify($channel, $payload)` / `notifyMany` | Publish a local event (single host, polled, durable). See [Events](#events-local-notification). |
+| `watch($channels, fromSeq: null, pollInterval: 0.05)` | Subscribe; `foreach`, `poll($timeout)`, `tryNext()`, `close()`. |
+| `saveCursor($name, $seq)` / `loadCursor($name)` | Persist a subscriber position for durable resume. |
+| `onChange($listener, ['set', 'delete', 'flush'])` | In-process callback after each committed mutation. |
 
 Every method that indicates a specific failure throws a typed exception (all extending `Lytecache\Exceptions\LytecacheException`): `CacheFullException`, `SerializationException`, `SchemaVersionException`, `LockTimeoutException`, `NotNumericException`.
+
+### Hashes
+
+`hset()` and friends update single fields of a stored JSON object **atomically**. The new
+document is computed inside SQLite from the row's current value, so PHP-FPM workers
+writing different fields, or `hincrBy()` on the same field, never lose each other's work.
+A `get()` → modify → `set()` would.
+
+```php
+$cache->hset('user:101', 'status', 'active'); // true: the field was new
+$cache->hincrBy('user:101', 'logins');        // atomic counter inside the document
+$cache->hget('user:101', 'status');           // 'active'
+```
+
+- **A hash is just a JSON value.** `set($key, [...])` is usable with `hget()`, and
+  `get()` returns the whole document.
+- **Missing keys are created** with no expiry, unless you pass `ttl:`, which applies only
+  on creation. Field writes never change an existing key's TTL, and expired keys are
+  never revived.
+- **Field names are literal top-level keys** (`'a.b'` is not a path).
+- **Errors:** a non-object value throws `SerializationException` and is left untouched;
+  `hincrBy()` on a non-integer field throws `NotNumericException`; overflowing an int
+  throws `OverflowException`, with nothing written.
+- **System SQLite matters here.** `pdo_sqlite` uses the system SQLite. Hashes need
+  SQLite ≥ 3.38 for JSON1, and in practice ≥ 3.49 for escaped quotes in JSON paths. On an
+  older system SQLite, lytecache logs one warning and uses a correct but slower
+  read-modify-write under `BEGIN IMMEDIATE`. `$cache->hashMode()` and
+  `stats()->hashMode` tell you which mode is in use. JSONB is never used.
+
+### Events (local notification)
+
+Processes sharing one cache file **on one machine** can notify each other. The typical
+case is invalidating per-worker in-memory state:
+
+```php
+// worker A, after committing a DB change
+$cache->delete('balance:42');
+$cache->notify('invalidate', ['key' => 'balance:42']);
+
+// a CLI worker on the same host
+foreach ($cache->watch('invalidate') as $event) {
+    unset($localMemo[$event->payload()['key']]);
+}
+```
+
+This is **not Redis Pub/Sub**. It is single host only, polled, and durable: events are
+rows with a monotonic `seq`, so `watch(..., fromSeq: $cursor)` resumes after a restart.
+Delivery is at-least-once, so handlers must be idempotent. PHP has no threads, so polling
+happens inside the consuming loop (`foreach`, `poll()`): every 50 ms while events flow,
+backing off to about 1 s when idle. Events are kept for `eventRetention` seconds
+(default 3600). A subscriber that falls further behind gets a `GapException`, never a
+silent skip.
+
+`onChange($listener)` runs listeners synchronously right after each mutation commits, in
+the same request. `publishChanges: ['delete', 'flush']` publishes those mutations to the
+reserved `__cache__` channel for other processes. Bulk operations emit one record, not
+one per key. Full guide: [docs/notifications.md](../docs/notifications.md).
 
 ### Why opportunistic maintenance?
 

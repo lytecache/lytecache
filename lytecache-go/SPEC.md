@@ -7,6 +7,8 @@ This document defines the storage schema and type encoding for the Go implementa
 - **Current**: 1
 - **Compatibility**: Higher versions are rejected on open with an error wrapping `ErrSchemaVersion`.
 
+- **Events table**: a file may also contain an `events` table and an `('events_version', '1')` row in `meta`, created the first time `notify`/`watch` is used. This is "schema version 2" in the root [SPEC.md](../SPEC.md#schema-versions). It is purely additive, so `schema_version` stays `1` and older libraries keep opening the file.
+
 ## Database Schema
 
 ```sql
@@ -133,6 +135,29 @@ Multiple processes creating the *same brand-new* WAL-mode file at the exact same
 ## Namespace Isolation
 
 The `namespace` column lets multiple independent caches share one file. Every query is scoped to `namespace`; different namespaces never see each other's keys, including for `Flush`.
+
+
+## Events and Hashes
+
+The normative rules for both features live in the root [SPEC.md](../SPEC.md): the
+`events` table and polling query, delivery semantics, the gap rule, change records,
+the hash path construction, type guards, TTL and `size_bytes` handling, and the JSON1
+fallback. This implementation follows them exactly. The Go-specific surface:
+
+**Events** (single host only, polled, durable; see [docs/notifications.md](../docs/notifications.md)):
+- `Notify(channel, payload) (seq, error)` and `NotifyMany([]Notification)`: the payload is encoded by the same rules as `Set`; a nil payload is stored as JSON `null`.
+- `Watch(patterns, FromSeq(n), PollInterval(d)) (*Subscription, error)`: one goroutine and one `query_only` connection per subscription. `Events()` is a channel closed on `Close` or on a gap; `Err()` returns the `*GapError`; `Next(ctx)` and `TryNext()` are the pull forms.
+- `SaveCursor` / `LoadCursor` use the `meta` key `cursor:<namespace>:<name>`.
+- `OnChange(fn, ops...)`: one dispatch goroutine, started with the first listener. The depth guard recognizes the dispatch goroutine by its id, since Go has no goroutine-locals. A panicking listener is recovered and logged.
+- `EventStats()` and `RecentEvents(limit, afterSeq)` are cross-namespace, read-only admin helpers, used by the CLI's `events` command and the UI's Events tab.
+
+**Hashes** (atomic field writes over value_type-4 JSON objects; no schema change):
+- `HSet`, `HSetNX`, `HSetMany`, `HGet(key, field, dest)`, `HGetRaw`, `HMGet`, `HGetAll` (`map[string]json.RawMessage`), `HDel`, `HExists`, `HKeys`, `HVals`, `HLen`, `HIncrBy`, `HIncrByFloat`.
+- `[]byte` field values are rejected rather than silently stored as base64.
+- The fallback keeps each field's exact JSON text and key order (it does not round-trip through a Go map), so it writes the same bytes as the JSON1 path.
+
+`HashMode()` / `Stats().HashMode` reports `"json1"` or `"fallback"`. `LYTECACHE_FORCE_JSON_FALLBACK=1` forces the fallback.
+
 
 ## Example: Cross-Language Read
 

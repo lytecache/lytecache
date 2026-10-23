@@ -50,3 +50,32 @@ export class LockTimeoutError extends LyteCacheError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Thrown (or emitted as `"error"`) by a {@link Subscription} when events it should have seen are
+ * gone: retention deleted them before it read them, or its cursor is ahead of the file (the file
+ * was recreated). Never silently skipped. To accept the loss, watch again with
+ * `{ fromSeq: err.resumeSeq }`.
+ */
+export class GapError extends LyteCacheError {
+  readonly requestedSeq: number;
+  readonly oldestSeq: number;
+  readonly resumeSeq: number;
+  readonly ahead: boolean;
+
+  constructor(requestedSeq: number, oldestSeq: number, ahead: boolean) {
+    super(
+      ahead
+        ? `cursor ${requestedSeq} is ahead of the last event ever published (${oldestSeq - 1}); ` +
+            "the database file was probably recreated"
+        : `events after seq ${requestedSeq} are no longer retained (oldest retained is ${oldestSeq}); ` +
+            `events ${requestedSeq + 1}..${oldestSeq - 1} were lost`,
+    );
+    this.name = "GapError";
+    this.requestedSeq = requestedSeq;
+    this.oldestSeq = oldestSeq;
+    this.resumeSeq = oldestSeq - 1;
+    this.ahead = ahead;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

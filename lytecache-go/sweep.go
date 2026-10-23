@@ -39,6 +39,7 @@ func (c *Cache) sweepOnce() {
 	c.flushLRUBuffer()
 	c.removeExpiredBatch()
 	c.enforceCapacity()
+	c.sweepEvents()
 }
 
 // MaintainResult reports what one [Cache.Maintain] pass did.

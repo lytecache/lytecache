@@ -1,0 +1,130 @@
+{{define "title"}}Lytecache -- {{.DB}} events{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1><span class="mono">{{.DB}}</span> <span class="sep">/</span> events</h1>
+  {{if .Enabled}}
+  <div class="toolbar">
+    <button type="button" id="toggle-previews" class="secondary">show payload previews</button>
+    <button type="button" id="pause-refresh" class="secondary">pause</button>
+    <span class="hint" id="refresh-status"></span>
+  </div>
+  {{end}}
+</div>
+<p class="hint">Local events published with <code>notify</code> by processes on the host that owns this file.
+Read-only: events cannot be published from this UI. Delivery to subscribers is polled, single-host, and at-least-once.</p>
+{{if not .Enabled}}
+<p class="empty-state">No events table: <code>notify</code>/<code>watch</code> has never been used on this database.</p>
+{{else}}
+<form class="filter-form" method="get" action="/db/{{.DB}}/events">
+  <input type="search" name="channel" id="key-filter" value="{{.Filter}}" placeholder="channel filter, e.g. invalidate orders:*" autocomplete="off" class="mono">
+  <button type="submit">filter</button>
+  <span class="hint">Same rule as <code>watch</code>: exact name, or a trailing <code>*</code> prefix; several patterns separated by spaces.</span>
+</form>
+<div id="refresh-region" data-newest-seq="{{.NewestSeq}}">
+
+{{if .LostCursors}}
+<p class="alert alert-error">{{.LostCursors}} subscriber cursor(s) are outside the retained range: those subscribers permanently missed events and will receive a gap error when they resume.</p>
+{{end}}
+
+<div class="panel-grid">
+<section class="panel">
+<h2>Retention</h2>
+<table class="data-table stats-table">
+<tbody>
+<tr><th>Retained events</th><td class="num">{{.Count}}</td></tr>
+<tr><th>Seq range</th><td class="num">{{if .Count}}{{.OldestSeq}} &ndash; {{end}}{{.NewestSeq}}</td></tr>
+<tr><th>Oldest retained</th><td class="num">{{if .OldestAge}}{{.OldestAge}} ago (seq {{.OldestSeq}}){{else}}&ndash;{{end}}</td></tr>
+<tr><th>Newest</th><td class="num">{{if .NewestAge}}{{.NewestAge}} ago{{else}}&ndash;{{end}}</td></tr>
+<tr><th>Retention window</th><td class="num">{{.Retention}}{{if not .RetentionDeclared}} <span class="hint" title="Retention is a per-process option and is not stored in the file. Declare the application's value as event_retention in ui.yaml's databases: list.">library default, not declared</span>{{end}}</td></tr>
+<tr><th>Publish rate</th><td class="num">{{.PublishRateDisplay}} events/min <span class="hint">(last 5 min)</span></td></tr>
+<tr><th>Payload bytes</th><td class="num">{{.PayloadBytes}}</td></tr>
+</tbody>
+</table>
+{{if .Channels}}
+<table class="data-table compact">
+<thead><tr><th>Channel</th><th>Retained</th><th>Oldest</th><th>Newest</th><th>Bytes</th></tr></thead>
+<tbody>
+{{range .Channels}}
+<tr><td class="mono">{{.Channel}}</td><td class="num">{{.Count}}</td><td class="num">{{.OldestAge}}</td><td class="num">{{.NewestAge}}</td><td class="num">{{.Bytes}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{end}}
+</section>
+
+<section class="panel">
+<h2>Subscriber lag</h2>
+{{if not .Cursors}}
+<p class="empty-state">No named cursors saved. Subscribers that call <code>save_cursor</code> / <code>SaveCursor</code> appear here.</p>
+{{else}}
+<table class="data-table compact">
+<thead><tr><th>Namespace</th><th>Cursor</th><th>Seq</th><th>Lag (events)</th><th>Lag (time)</th><th>Status</th></tr></thead>
+<tbody>
+{{range .Cursors}}
+<tr class="{{if or .Lost .Ahead}}row-error{{end}}">
+<td class="mono">{{.Namespace}}</td>
+<td class="mono">{{.Name}}</td>
+<td class="num">{{.Seq}}</td>
+<td class="num">{{.LagEvents}}</td>
+<td class="num">{{.LagDisplay}}</td>
+<td>{{if .Lost}}<span class="pill pill-error" title="Older than the oldest retained event: this subscriber permanently missed events and gets a gap error on resume">lost events</span>
+{{- else if .Ahead}}<span class="pill pill-error" title="Ahead of the last seq ever assigned: the file was probably recreated; gap error on resume">ahead of file</span>
+{{- else if .LagEvents}}<span class="pill pill-warning">behind</span>
+{{- else}}<span class="pill pill-ok">caught up</span>{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+<p class="hint">Lag is measured against the newest seq across all channels; a cursor does not record which channels its subscriber watches, so a subscriber of quiet channels can look further behind than it is.</p>
+{{end}}
+</section>
+</div>
+
+<h2>Live tail {{if .Filter}}<span class="hint">matching <code>{{.Filter}}</code></span>{{end}}</h2>
+{{if not .Rows}}
+<p class="empty-state">No {{if .Filter}}matching {{end}}events retained.</p>
+{{else}}
+<div class="table-scroll">
+<table class="data-table">
+<thead><tr><th>Seq</th><th>Age</th><th>Time (UTC)</th><th>Channel</th><th>Namespace</th><th>Type</th><th>Size</th><th>Payload</th></tr></thead>
+<tbody>
+{{$db := .DB}}
+{{range .Rows}}
+<tr data-key-row data-href="/db/{{$db}}/events/{{.Seq}}" tabindex="-1">
+<td class="num"><a href="/db/{{$db}}/events/{{.Seq}}">{{.Seq}}</a></td>
+<td class="num">{{.Age}}</td>
+<td class="mono">{{.Time}}</td>
+<td class="mono">{{.Channel}}</td>
+<td class="mono">{{.Namespace}}</td>
+<td>{{.TypeName}}</td>
+<td class="num">{{.SizeBytes}} B</td>
+<td class="payload-cell">{{if .Masked}}<span class="masked-inline">{{.PreviewNote}}</span>
+{{- else if .Preview}}<span class="payload-preview mono">{{.Preview}}</span><span class="payload-hidden hint">hidden</span>
+{{- else}}<span class="hint">{{.PreviewNote}}</span>{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{end}}
+</div>
+
+{{if .AllowDelete}}
+<div class="danger-zone">
+  <h2>Purge events</h2>
+  <p class="hint">Deletion only, recorded in the audit log. Purging by age removes the oldest events as retention would, so subscribers whose cursors fall inside get a gap error; deleting a single event or a channel just means subscribers that had not reached them never see them.</p>
+  <form method="post" action="/db/{{.DB}}/events/purge" class="inline-form" data-confirm="Delete every event older than this age?">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <label>older than <input type="text" name="older_than" value="24h" size="6" class="mono"></label>
+    <button type="submit" class="danger">purge older events</button>
+  </form>
+  <form method="post" action="/db/{{.DB}}/events/clear-channel" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <label>channel <input type="text" name="channel" class="mono" required></label>
+    <label>type it again <input type="text" name="confirm_channel" class="mono" required autocomplete="off"></label>
+    <button type="submit" class="danger">clear channel</button>
+  </form>
+</div>
+{{end}}
+{{end}}
+{{end}}

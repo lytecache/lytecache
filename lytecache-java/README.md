@@ -189,6 +189,68 @@ LyteCache cache = LyteCache.builder()
     .build();
 ```
 
+### Hashes (atomic field writes)
+
+`hset` and friends update single fields of a stored JSON object **atomically**. The new
+document is computed inside SQLite from the row's current value, so concurrent writers to
+different fields, or `hincrBy` on the same field, never lose each other's work, across
+threads and processes. A get-modify-set in application code would.
+
+```java
+cache.hset("user:101", "status", "active");   // true: the field was new
+cache.hincrBy("user:101", "logins", 1);       // atomic counter inside the document
+String status = cache.hgetString("user:101", "status");
+Map<String, Object> all = cache.hgetAll("user:101");
+```
+
+- **A hash is just a JSON value.** `set(key, map)` is usable with `hget`, and
+  `get(key, Map.class)` returns the whole document.
+- **Missing keys are created** with no expiry, unless you use the `ttlIfCreated` overloads,
+  which apply only on creation. Field writes never change an existing key's TTL, and
+  expired keys are never revived.
+- **Field names are literal top-level keys** (`"a.b"` is not a path).
+- **Errors:** a non-object value throws `SerializationException` and is left untouched;
+  `hincrBy` on a non-integer field throws `IllegalStateException`; overflowing a `long`
+  throws `ArithmeticException`, with nothing written.
+- **SQLite version:** `cache.hashMode()` / `stats().hashMode()` reports `"json1"`. This
+  needs the bundled SQLite 3.53 (sqlite-jdbc 3.53.4.0); SQLite 3.44/3.45 mishandle escaped
+  quotes in JSON paths and would be detected and switched to the read-modify-write
+  fallback. JSONB is never used.
+
+### Events (local notification)
+
+Processes sharing one cache file **on one machine** can notify each other. The typical
+case is invalidating in-memory state, for example between a Spring app and its background
+worker:
+
+```java
+// worker A, after committing a DB change
+cache.delete("balance:42");
+cache.notify("invalidate", Map.of("key", "balance:42"));
+
+// workers B..N
+try (Subscription sub = cache.watch("invalidate")) {
+    for (Event e : sub) localMemo.remove(e.payload(Map.class).get("key"));
+}
+```
+
+This is **not Redis Pub/Sub**. It is single host only, polled (about 50 ms; up to about
+1 s after an idle spell), and durable: events are rows with a monotonic `seq()`, so
+`watch(WatchOptions.defaults().fromSeq(cursor), ...)` resumes after a restart. Delivery
+is at-least-once, so handlers must be idempotent. Events are kept for
+`eventRetention(Duration)` (default 1 h). A subscriber that falls further behind gets a
+`GapException`, never a silent skip.
+
+A `Subscription` is `Iterable<Event>` and `AutoCloseable`, with `poll(Duration)`,
+`tryNext()`, and a push form, `onEvent(Consumer)` with `onGap(Consumer)`. It is opt-in:
+no table and no thread exist until you use it.
+
+`onChange(listener)` is the in-process, immediate alternative.
+`builder().publishChanges(ChangeOp.DELETE, ChangeOp.FLUSH)` publishes those mutations to
+the reserved `__cache__` channel for other processes. Bulk operations emit one
+`ChangeRecord`, not one per key. Full guide:
+[docs/notifications.md](../docs/notifications.md).
+
 ## Where Is My Data?
 
 By default, LyteCache stores the database file in your platform's cache directory:
@@ -253,7 +315,7 @@ For typical single-threaded usage, reads are fast (< 1ms), writes are ~10ms (inc
 ## Dependencies
 
 Runtime:
-- `org.xerial:sqlite-jdbc` — SQLite JDBC driver
+- `org.xerial:sqlite-jdbc` — SQLite JDBC driver (3.53.4.0, bundling SQLite 3.53: needed for the JSON1 hash path)
 - `com.fasterxml.jackson.core:jackson-databind` — JSON serialization
 - `com.fasterxml.jackson.datatype:jackson-datatype-jsr310` — `java.time` support
 

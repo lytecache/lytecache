@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	lytecache "github.com/lytecache/lytecache-go"
+	"gopkg.in/yaml.v3"
 )
 
 // DBSource names one configured database file, from a config file's
@@ -29,6 +31,33 @@ type DBSource struct {
 	// "usage bars where those limits are known".
 	MaxKeys  *int64 `yaml:"max_keys,omitempty"`
 	MaxBytes *int64 `yaml:"max_bytes,omitempty"`
+
+	// EventRetention is the operator-declared event retention the
+	// application uses for this file (its WithEventRetention), shown on the
+	// Events tab's retention panel. Like MaxKeys it is a per-process option
+	// that is never written to the file, so it cannot be discovered; nil
+	// means "not declared" and the panel shows the library default.
+	EventRetention *Duration `yaml:"event_retention,omitempty"`
+}
+
+// Duration is a time.Duration that reads and writes YAML as a Go duration
+// string ("24h", "90m") rather than integer nanoseconds.
+type Duration time.Duration
+
+// MarshalYAML implements yaml.Marshaler.
+func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(), nil }
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	parsed, err := time.ParseDuration(value.Value)
+	if err != nil {
+		return fmt.Errorf("event_retention: %w", err)
+	}
+	if parsed <= 0 {
+		return fmt.Errorf("event_retention must be positive, got %s", value.Value)
+	}
+	*d = Duration(parsed)
+	return nil
 }
 
 // MergeSources combines explicitly configured sources (config file +
@@ -101,10 +130,17 @@ type dbEntry struct {
 	// discovered from the file itself.
 	DeclaredMaxKeys  *int64
 	DeclaredMaxBytes *int64
+	// DeclaredEventRetention is DBSource.EventRetention; nil if undeclared.
+	DeclaredEventRetention *Duration
 
 	mu     sync.Mutex
 	caches map[string]*lytecache.Cache
 }
+
+// NoEventRetention is the event retention admin tooling opens files with:
+// effectively forever, so a maintenance pass never deletes events. Event
+// retention belongs to the application that publishes them.
+const NoEventRetention = 100 * 365 * 24 * time.Hour
 
 // Cache returns the Cache for this database's namespace, opening (and
 // caching) it on first use. A missing/locked/incompatible-schema file
@@ -130,7 +166,15 @@ func (e *dbEntry) Cache(namespace string) (*lytecache.Cache, error) {
 		}
 		return nil, fmt.Errorf("database file %s: %w", e.Path, err)
 	}
-	c, err := lytecache.New(lytecache.WithPath(e.Path), lytecache.WithNamespace(namespace))
+	c, err := lytecache.New(lytecache.WithPath(e.Path), lytecache.WithNamespace(namespace),
+		// No background sweeper: an inspection tool must not write to a file
+		// an application is using unless the operator asks it to.
+		lytecache.WithSweepInterval(0),
+		// Every handle's sweep (including an explicit maintenance pass)
+		// deletes events older than ITS OWN retention. The UI cannot know the
+		// application's, so it must never apply one -- the library default
+		// (1h) would silently delete events the app means to keep.
+		lytecache.WithEventRetention(NoEventRetention))
 	if err != nil {
 		return nil, err
 	}
@@ -161,11 +205,12 @@ func NewManager(sources []DBSource) *Manager {
 // addLocked appends a new entry for s. Caller must hold mu for writing.
 func (m *Manager) addLocked(s DBSource) *dbEntry {
 	e := &dbEntry{
-		Name:             s.Name,
-		Path:             s.Path,
-		DeclaredMaxKeys:  s.MaxKeys,
-		DeclaredMaxBytes: s.MaxBytes,
-		caches:           make(map[string]*lytecache.Cache),
+		Name:                   s.Name,
+		Path:                   s.Path,
+		DeclaredMaxKeys:        s.MaxKeys,
+		DeclaredMaxBytes:       s.MaxBytes,
+		DeclaredEventRetention: s.EventRetention,
+		caches:                 make(map[string]*lytecache.Cache),
 	}
 	m.entries = append(m.entries, e)
 	m.byName[s.Name] = e

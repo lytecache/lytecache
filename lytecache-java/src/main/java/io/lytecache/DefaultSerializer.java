@@ -29,7 +29,15 @@ class DefaultSerializer implements Serializer {
     private final ObjectMapper mapper;
 
     public DefaultSerializer() {
-        this.mapper = new ObjectMapper();
+        this.mapper = newMapper();
+    }
+
+    /**
+     * The Jackson configuration every type-code-4 value is written with: java.time as ISO-8601
+     * strings, BigDecimal as a plain-decimal string. Shared with hash field encoding.
+     */
+    static ObjectMapper newMapper() {
+        ObjectMapper mapper = new ObjectMapper();
         // Register JSR-310 (java.time) module for ISO-8601 strings
         mapper.registerModule(new JavaTimeModule());
         // Disable timestamps for dates, use ISO-8601 strings
@@ -44,6 +52,7 @@ class DefaultSerializer implements Serializer {
             }
         });
         mapper.registerModule(module);
+        return mapper;
     }
 
     @Override

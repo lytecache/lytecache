@@ -1,6 +1,7 @@
 package lytecache_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -53,6 +54,70 @@ func TestHelperProcess(_ *testing.T) {
 		if err := lock.Release(); err != nil {
 			fmt.Fprintln(os.Stderr, "helper: Release:", err)
 			os.Exit(1)
+		}
+	case "hset", "hincrby":
+		key := os.Getenv("LYTECACHE_HELPER_KEY")
+		field := os.Getenv("LYTECACHE_HELPER_FIELD")
+		iterations, _ := strconv.Atoi(os.Getenv("LYTECACHE_HELPER_ITERATIONS"))
+		for i := 0; i < iterations; i++ {
+			var err error
+			if os.Getenv("LYTECACHE_HELPER_MODE") == "hset" {
+				_, err = c.HSet(key, field, i)
+			} else {
+				_, err = c.HIncrBy(key, field, 1)
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "helper:", err)
+				os.Exit(1)
+			}
+		}
+	case "publish":
+		n, _ := strconv.Atoi(os.Getenv("LYTECACHE_HELPER_ITERATIONS"))
+		for i := 0; i < n; i++ {
+			for _, ch := range []string{"orders:new", "unrelated"} {
+				if _, err := c.Notify(ch, i); err != nil {
+					fmt.Fprintln(os.Stderr, "helper: Notify:", err)
+					os.Exit(1)
+				}
+			}
+		}
+	case "subscribe":
+		n, _ := strconv.Atoi(os.Getenv("LYTECACHE_HELPER_ITERATIONS"))
+		sub, err := c.Watch([]string{"orders*"})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "helper: Watch:", err)
+			os.Exit(1)
+		}
+		appendLogLine(os.Getenv("LYTECACHE_HELPER_READY"), "ready")
+		for i := 0; i < n; i++ {
+			e, err := sub.Next(context.Background())
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "helper: Next:", err)
+				os.Exit(1)
+			}
+			var p int
+			_ = e.Decode(&p)
+			appendLogLine(os.Getenv("LYTECACHE_HELPER_LOG"), fmt.Sprintf("%d %s %d", e.Seq, e.Channel, p))
+		}
+		_ = sub.Close()
+	case "cursorsub":
+		// Handles events forever, saving its cursor after each; killed by the test.
+		from, found, _ := c.LoadCursor("worker")
+		var opts []lytecache.WatchOption
+		if found {
+			opts = append(opts, lytecache.FromSeq(from))
+		}
+		sub, err := c.Watch([]string{"jobs"}, opts...)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "helper: Watch:", err)
+			os.Exit(1)
+		}
+		appendLogLine(os.Getenv("LYTECACHE_HELPER_READY"), "ready")
+		for e := range sub.Events() {
+			if err := c.SaveCursor("worker", e.Seq); err != nil {
+				fmt.Fprintln(os.Stderr, "helper: SaveCursor:", err)
+				os.Exit(1)
+			}
 		}
 	default:
 		fmt.Fprintln(os.Stderr, "helper: unknown LYTECACHE_HELPER_MODE")

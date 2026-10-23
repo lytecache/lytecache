@@ -75,7 +75,17 @@ Every command works the same whether you run it one-shot, as above, or type it a
 | `vacuum` | Reclaim disk space; prints size before/after. |
 | `which` | Print the resolved database path and whether it exists. |
 | `dump <key>` | Raw row metadata: value type code/name, timestamps, sizes. The view you reach for when debugging. |
-| `watch [interval]` | Redraw `stats` every `interval` seconds (default 2) until Ctrl-C. |
+| `stats --watch[=seconds]` | Redraw `stats` every N seconds (default 2) until Ctrl-C. |
+| `hget <key> <field>` | Print one field of a JSON object value. `(nil)` + exit 1 on a miss. |
+| `hgetall <key>` | Print the whole object, in document order (`--raw` for compact JSON). |
+| `hset <key> <field> <value> [--ttl seconds] [--type ...]` | Atomically set one field; prints `1` if it was new, `0` if replaced. `--ttl` applies only if the key is created. |
+| `notify <channel> [payload]` | Publish a local event (single host, polled, durable); prints its seq. The payload is inferred like `set` values. |
+| `watch <channel-pattern>... [--from-seq N] [--count N]` | Tail events live, one JSON object per line (pipe into `jq`). A trailing `*` matches a prefix. `--from-seq 0` replays everything retained. Exits 3 on a retention gap. |
+| `events [--limit 50] [--json]` | Recent retained events (seq, channel, namespace, age, size) and retention stats, across all namespaces. |
+
+`watch` with no arguments, or a single number, still redraws `stats` as it used to, with
+a deprecation note on stderr. Use `stats --watch` instead. Event tailing is described in
+[docs/notifications.md](../docs/notifications.md).
 
 Global flags: `--db <path>`, `--namespace <name>` (default `default`), `--quiet` (suppress decoration), `--version`.
 
@@ -88,7 +98,7 @@ $ lytecache ui --db orders=/data/orders.db
 lytecache ui listening on http://127.0.0.1:7070
 ```
 
-Fleet dashboard, a namespace-aware key browser, a value viewer, cross-database search, and delete-only mutations (`--allow-delete`) — see **[docs/ui.md](docs/ui.md)** for the full guide, including multi-database setup, `/metrics` for Prometheus, running it as a background service (`lytecache service install`), and the exposure guardrails that apply before you point it at anything beyond your own machine.
+Fleet dashboard, a namespace-aware key browser, a value viewer, a read-only **Events** tab (a live tail of retained events, with retention stats; the UI cannot publish events), cross-database search, and delete-only mutations (`--allow-delete`) — see **[docs/ui.md](docs/ui.md)** for the full guide, including multi-database setup, `/metrics` for Prometheus, running it as a background service (`lytecache service install`), and the exposure guardrails that apply before you point it at anything beyond your own machine.
 
 ## Database resolution
 

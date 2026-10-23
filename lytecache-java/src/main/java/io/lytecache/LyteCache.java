@@ -1,6 +1,7 @@
 package io.lytecache;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.File;
 import java.io.IOException;
@@ -11,6 +12,7 @@ import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
@@ -62,6 +64,18 @@ public class LyteCache implements AutoCloseable {
 
     private volatile boolean closed = false;
 
+    // JSON1 support for hash operations, detected once at open.
+    private final boolean json1;
+    // Events and change listeners are opt-in: none of this costs anything (no table, no thread)
+    // until notify/watch/onChange is first used.
+    private final Set<ChangeOp> publishOps;
+    private final Duration eventRetention;
+    private final long eventMaxCount;
+    private final int changeKeyCap;
+    private volatile boolean eventsReady = false;
+    private final Set<Subscription> subscriptions = ConcurrentHashMap.newKeySet();
+    private volatile ChangeDispatcher dispatcher;
+
     private LyteCache(Builder builder) {
         this.dbPath = builder.dbPath;
         this.namespace = builder.namespace;
@@ -71,9 +85,14 @@ public class LyteCache implements AutoCloseable {
         this.sweepInterval = builder.sweepInterval;
         this.strict = builder.strict;
         this.serializer = builder.serializer;
+        this.publishOps = builder.publishOps.isEmpty() ? EnumSet.noneOf(ChangeOp.class) : EnumSet.copyOf(builder.publishOps);
+        this.eventRetention = builder.eventRetention;
+        this.eventMaxCount = builder.eventMaxCount;
+        this.changeKeyCap = builder.changeKeyCap;
 
         this.dataSource = new DataSource(dbPath);
         initializeDatabase();
+        this.json1 = detectJson1();
 
         // Start sweeper if interval is not null
         if (sweepInterval != null) {
@@ -249,6 +268,7 @@ public class LyteCache implements AutoCloseable {
             throw new LyteCacheException("Failed to set key: " + e.getMessage(), e);
         }
 
+        changed(ChangeOp.SET, List.of(key), 1);
         // Buffer for sweeper
         enforceCapacity();
     }
@@ -465,8 +485,9 @@ public class LyteCache implements AutoCloseable {
         checkNotClosed();
         if (keys.length == 0) return 0;
 
+        int removed;
         try {
-            return dataSource.executeUpdate(conn -> {
+            removed = dataSource.executeUpdate(conn -> {
                 int deleted = 0;
                 for (String key : keys) {
                     String sql = "DELETE FROM cache WHERE namespace = ? AND key = ?";
@@ -481,6 +502,10 @@ public class LyteCache implements AutoCloseable {
         } catch (SQLException e) {
             throw new LyteCacheException("Delete failed: " + e.getMessage(), e);
         }
+        if (removed > 0) {
+            changed(ChangeOp.DELETE, new ArrayList<>(new LinkedHashSet<>(Arrays.asList(keys))), removed);
+        }
+        return removed;
     }
 
     /**
@@ -502,6 +527,10 @@ public class LyteCache implements AutoCloseable {
      * @return true if set, false if key already existed
      */
     public boolean add(String key, Object value, Duration ttl) {
+        return addInternal(key, value, ttl, true);
+    }
+
+    private boolean addInternal(String key, Object value, Duration ttl, boolean emit) {
         checkNotClosed();
         Serializer.SerializedValue sv = serializer.serialize(value);
         long now = System.currentTimeMillis();
@@ -544,6 +573,9 @@ public class LyteCache implements AutoCloseable {
                 }
             });
             if (won) {
+                if (emit) {
+                    changed(ChangeOp.SET, List.of(key), 1);
+                }
                 enforceCapacity();
             }
             return won;
@@ -572,8 +604,9 @@ public class LyteCache implements AutoCloseable {
                 UPDATE cache SET value = ?, value_type = ?, created_at = ?, expires_at = ?, last_accessed = ?, access_count = 0
                 WHERE namespace = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)
                 """;
+        boolean replaced;
         try {
-            return dataSource.executeUpdate(conn -> {
+            replaced = dataSource.executeUpdate(conn -> {
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setBytes(1, sv.bytes());
                     ps.setInt(2, sv.typeCode());
@@ -589,6 +622,10 @@ public class LyteCache implements AutoCloseable {
         } catch (SQLException e) {
             throw new LyteCacheException("Replace failed: " + e.getMessage(), e);
         }
+        if (replaced) {
+            changed(ChangeOp.SET, List.of(key), 1);
+        }
+        return replaced;
     }
 
     /**
@@ -603,8 +640,9 @@ public class LyteCache implements AutoCloseable {
         Serializer.SerializedValue sv = serializer.serialize(value);
         long now = System.currentTimeMillis();
 
+        String old;
         try {
-            return dataSource.executeUpdate(conn -> {
+            old = dataSource.executeUpdate(conn -> {
                 try (Statement begin = conn.createStatement()) {
                     begin.execute("BEGIN IMMEDIATE");
                 }
@@ -665,6 +703,8 @@ public class LyteCache implements AutoCloseable {
         } catch (SQLException e) {
             throw new LyteCacheException("getSet failed: " + e.getMessage(), e);
         }
+        changed(ChangeOp.SET, List.of(key), 1);
+        return old;
     }
 
     /**
@@ -731,6 +771,8 @@ public class LyteCache implements AutoCloseable {
         } catch (SQLException e) {
             throw new LyteCacheException("setAll failed: " + e.getMessage(), e);
         }
+        // ONE change record for the whole batch, never one per key.
+        changed(ChangeOp.SET, new ArrayList<>(entries.keySet()), entries.size());
     }
 
     /**
@@ -990,8 +1032,9 @@ public class LyteCache implements AutoCloseable {
                    OR cache.value_type IN %s
                 """.formatted(inClause);
 
+        String incrResult;
         try {
-            return dataSource.executeUpdate(conn -> {
+            incrResult = dataSource.executeUpdate(conn -> {
                 try (Statement begin = conn.createStatement()) {
                     begin.execute("BEGIN IMMEDIATE");
                 }
@@ -1048,6 +1091,1252 @@ public class LyteCache implements AutoCloseable {
             });
         } catch (SQLException e) {
             throw new LyteCacheException("incr failed: " + e.getMessage(), e);
+        }
+        changed(ChangeOp.SET, List.of(key), 1);
+        return incrResult;
+    }
+
+    // -- hashes: field-level access to JSON object values ------------------------------------
+    //
+    // A hash is not a separate type: it is a view over an ordinary value_type-4 row whose JSON
+    // root is an object. Anything written with set(key, map) is usable with hget, and get() on a
+    // hash returns the whole document. The reason these exist is atomicity: on the JSON1 path
+    // every write is computed inside SQLite from the row's *current* value (json_set /
+    // json_remove), so two processes updating different fields never lose each other's write.
+    // Where an exact return value needs more than one statement (hset's "created", hdel's count),
+    // guarded writes run inside one BEGIN IMMEDIATE transaction; no write depends on data read
+    // into Java. The read-modify-write fallback (SQLite without JSON1, or
+    // LYTECACHE_FORCE_JSON_FALLBACK=1) holds the write lock throughout.
+
+    private static final String FORCE_JSON_FALLBACK_ENV = "LYTECACHE_FORCE_JSON_FALLBACK";
+    private static final int HSET_MANY_PER_STATEMENT = 500;
+    private static final int JSON_SET_PAIRS = 30; // stays under builds with a 100-argument limit
+    private static final String DOC = "CAST(cache.value AS TEXT)";
+    private static final String LIVE = "(cache.expires_at IS NULL OR cache.expires_at > :now)";
+    private static final String EXPIRED = "(cache.expires_at IS NOT NULL AND cache.expires_at <= :now)";
+    private static final String ROOT_TYPE = "(CASE WHEN json_valid(" + DOC + ") THEN json_type(" + DOC + ") END)";
+    private static final String IS_OBJ = "(cache.value_type = 4 AND CASE WHEN json_valid(" + DOC + ") THEN json_type("
+            + DOC + ") END = 'object')";
+    private static final String[] TYPE_NAMES = {"bytes", "str", "int", "float", "json", "pickle", "java-native"};
+
+    /** Field names are always bound, never interpolated: $."field" with \ and " escaped, in SQL. */
+    private static String path(String param) {
+        return "('$.\"' || replace(replace(:" + param + ", '\\', '\\\\'), '\"', '\\\"') || '\"')";
+    }
+
+    private static String fieldType(String param) {
+        return "(CASE WHEN " + IS_OBJ + " THEN json_type(" + DOC + ", " + path(param) + ") END)";
+    }
+
+    /**
+     * JSON text for a REAL with the fewest digits that round-trip exactly. SQLite before ~3.5x
+     * renders a REAL into JSON (and CAST(x AS TEXT)) with 15 significant digits, which would store
+     * 0.1 + 0.2 as 0.3; this picks the shortest of 15/16/17 digits that reads back to the same
+     * double, on every SQLite version.
+     */
+    private static String floatText(String expr) {
+        String p15 = "printf('%!.15g', " + expr + ")";
+        String p16 = "printf('%!.16g', " + expr + ")";
+        String p17 = "printf('%!.17g', " + expr + ")";
+        return "(CASE WHEN CAST(" + p15 + " AS REAL) = " + expr + " THEN " + p15 + " WHEN CAST(" + p16 + " AS REAL) = "
+                + expr + " THEN " + p16 + " ELSE " + p17 + " END)";
+    }
+
+    /**
+     * An UPSERT that creates {@code freshDoc} for a missing/expired key, or rewrites a live JSON
+     * object to {@code liveDoc} when {@code where} holds. expires_at is preserved on a live row
+     * and size_bytes is recomputed from the new value in the same statement.
+     */
+    private static String upsertHashSql(String liveDoc, String freshDoc, String where) {
+        String newDoc = "CAST(CASE WHEN " + EXPIRED + " THEN " + freshDoc + " ELSE " + liveDoc + " END AS BLOB)";
+        return "INSERT INTO cache (key, namespace, value, value_type, created_at, expires_at, last_accessed, "
+                + "access_count, size_bytes) VALUES (:key, :ns, CAST(" + freshDoc + " AS BLOB), 4, :now, :exp, :now, 0, "
+                + "length(CAST(" + freshDoc + " AS BLOB))) ON CONFLICT(namespace, key) DO UPDATE SET "
+                + "value = " + newDoc + ", value_type = 4, "
+                + "created_at = CASE WHEN " + EXPIRED + " THEN :now ELSE cache.created_at END, "
+                + "expires_at = CASE WHEN " + EXPIRED + " THEN :exp ELSE cache.expires_at END, "
+                + "last_accessed = :now, "
+                + "access_count = CASE WHEN " + EXPIRED + " THEN 0 ELSE cache.access_count + 1 END, "
+                + "size_bytes = length(" + newDoc + ") WHERE " + EXPIRED + " OR " + where;
+    }
+
+    private boolean detectJson1() {
+        String forced = System.getenv(FORCE_JSON_FALLBACK_ENV);
+        if (forced == null || forced.isEmpty()) {
+            forced = System.getProperty("lytecache.forceJsonFallback"); // same knob, settable in-process
+        }
+        if (forced != null && !forced.isEmpty()) {
+            logger.warning("lytecache: " + FORCE_JSON_FALLBACK_ENV
+                    + " is set; hash operations use the read-modify-write fallback");
+            return false;
+        }
+        try {
+            return dataSource.executeUpdate(conn -> {
+                try (Statement s = conn.createStatement();
+                        ResultSet rs = s.executeQuery("SELECT json_valid('{}'), '{\"a\\\"b\":[1]}' -> '$.\"a\\\"b\"', "
+                                + "sqlite_version()")) {
+                    rs.next();
+                    boolean ok = rs.getInt(1) == 1 && "[1]".equals(rs.getString(2));
+                    if (!ok) {
+                        logger.warning("lytecache: SQLite " + rs.getString(3) + " lacks the JSON1 support hash "
+                                + "operations need (JSON functions, the -> operator and escaped path labels); falling "
+                                + "back to a slower read-modify-write under BEGIN IMMEDIATE");
+                    }
+                    return ok;
+                } catch (SQLException e) {
+                    logger.warning("lytecache: SQLite lacks JSON1 (" + e.getMessage()
+                            + "); hash operations fall back to read-modify-write under BEGIN IMMEDIATE");
+                    return false;
+                }
+            });
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Which hash implementation this cache uses: {@code "json1"} (single SQL statements) or
+     * {@code "fallback"} (read-modify-write under BEGIN IMMEDIATE, when the linked SQLite lacks
+     * JSON1). Also reported by {@link CacheStats#hashMode()}.
+     *
+     * @return the hash mode
+     */
+    public String hashMode() {
+        return json1 ? "json1" : "fallback";
+    }
+
+    private Map<String, Object> hashParams(String key, long now, Duration ttl) {
+        Map<String, Object> p = new HashMap<>();
+        p.put("ns", namespace);
+        p.put("key", key);
+        p.put("now", now);
+        p.put("exp", ttl == null ? null : now + ttl.toMillis());
+        return p;
+    }
+
+    private static SerializationException wrongType(String key, int valueType, String rootType) {
+        if (valueType != TypeCode.JSON) {
+            String name = valueType >= 0 && valueType < TYPE_NAMES.length ? TYPE_NAMES[valueType] : "unknown";
+            return new SerializationException("key '" + key + "' holds a value of type " + name + " (value_type="
+                    + valueType + "), not a JSON object; hash operations apply only to JSON objects (value_type=4)");
+        }
+        if (rootType == null) {
+            return new SerializationException("key '" + key + "' holds malformed JSON (value_type=4)");
+        }
+        return new SerializationException("key '" + key + "' holds a JSON " + rootType
+                + ", not a JSON object; hash operations apply only to JSON objects");
+    }
+
+    private void checkHashType(Connection conn, String key, long now) throws SQLException {
+        Map<String, Object> p = hashParams(key, now, null);
+        try (PreparedStatement ps = NamedSql.of("SELECT cache.value_type, " + ROOT_TYPE
+                + " FROM cache WHERE namespace = :ns AND key = :key AND " + LIVE).prepare(conn, p);
+                ResultSet rs = ps.executeQuery()) {
+            if (rs.next() && !(rs.getInt(1) == TypeCode.JSON && "object".equals(rs.getString(2)))) {
+                throw wrongType(key, rs.getInt(1), rs.getString(2));
+            }
+        }
+    }
+
+    private static int run(Connection conn, String sql, Map<String, Object> params) throws SQLException {
+        try (PreparedStatement ps = NamedSql.of(sql).prepare(conn, params)) {
+            return ps.executeUpdate();
+        }
+    }
+
+    /** Runs {@code body} inside BEGIN IMMEDIATE on the write connection; rolls back on any error. */
+    private <T> T inImmediate(SqlFunction<T> body) {
+        try {
+            return dataSource.executeUpdate(conn -> {
+                try (Statement s = conn.createStatement()) {
+                    s.execute("BEGIN IMMEDIATE");
+                }
+                try {
+                    T result = body.apply(conn);
+                    try (Statement s = conn.createStatement()) {
+                        s.execute("COMMIT");
+                    }
+                    return result;
+                } catch (RuntimeException | SQLException e) {
+                    try (Statement s = conn.createStatement()) {
+                        s.execute("ROLLBACK");
+                    } catch (SQLException ignored) {
+                        // best-effort rollback
+                    }
+                    throw e;
+                }
+            });
+        } catch (SQLException e) {
+            throw new LyteCacheException("hash operation failed: " + e.getMessage(), e);
+        }
+    }
+
+    private void capacityCheck(String key) {
+        if (eviction == Eviction.NOEVICTION) {
+            checkCapacityBeforeWrite(key);
+        }
+    }
+
+    /** Fallback path: the whole live document, or null if missing/expired. */
+    private ObjectNode loadHash(Connection conn, String key, long now) throws SQLException {
+        Map<String, Object> p = hashParams(key, now, null);
+        try (PreparedStatement ps = NamedSql.of("SELECT value, value_type FROM cache WHERE namespace = :ns AND key = :key AND "
+                + LIVE).prepare(conn, p); ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) {
+                return null;
+            }
+            int vt = rs.getInt(2);
+            if (vt != TypeCode.JSON) {
+                throw wrongType(key, vt, null);
+            }
+            com.fasterxml.jackson.databind.JsonNode node;
+            try {
+                node = JsonSupport.EXACT.readTree(new String(rs.getBytes(1), java.nio.charset.StandardCharsets.UTF_8));
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw wrongType(key, TypeCode.JSON, null);
+            }
+            if (!(node instanceof ObjectNode obj)) {
+                throw wrongType(key, TypeCode.JSON, JsonSupport.rootType(node));
+            }
+            return obj;
+        }
+    }
+
+    private static <R> Map.Entry<Boolean, R> entry(boolean changed, R result) {
+        return new AbstractMap.SimpleImmutableEntry<>(changed, result); // Map.entry rejects null
+    }
+
+    @FunctionalInterface
+    private interface HashMutation<R> {
+        /** Mutates {@code doc} in place; returns whether it changed, and the result. */
+        Map.Entry<Boolean, R> apply(ObjectNode doc);
+    }
+
+    /** Fallback path: read, mutate in Java, write back -- all under BEGIN IMMEDIATE. */
+    private <R> R rmwHash(String key, Duration ttl, boolean create, HashMutation<R> mutate) {
+        long now = System.currentTimeMillis();
+        boolean[] wrote = {false};
+        R result = inImmediate(conn -> {
+            ObjectNode doc = loadHash(conn, key, now);
+            boolean exists = doc != null;
+            if (doc == null) {
+                if (!create) {
+                    return mutate.apply(JsonSupport.EXACT.createObjectNode()).getValue();
+                }
+                if (eviction == Eviction.NOEVICTION) {
+                    checkCapacityInTx(conn, key);
+                }
+                doc = JsonSupport.EXACT.createObjectNode();
+            }
+            Map.Entry<Boolean, R> r = mutate.apply(doc);
+            if (!r.getKey()) {
+                return r.getValue();
+            }
+            byte[] blob = JsonSupport.compact(doc).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            Map<String, Object> p = hashParams(key, now, ttl);
+            p.put("v", blob);
+            p.put("size", (long) blob.length);
+            if (exists) {
+                run(conn, "UPDATE cache SET value = :v, size_bytes = :size, last_accessed = :now, "
+                        + "access_count = access_count + 1 WHERE namespace = :ns AND key = :key", p);
+            } else {
+                run(conn, "INSERT OR REPLACE INTO cache (key, namespace, value, value_type, created_at, expires_at, "
+                        + "last_accessed, access_count, size_bytes) VALUES (:key, :ns, :v, 4, :now, :exp, :now, 0, :size)", p);
+            }
+            wrote[0] = true;
+            return r.getValue();
+        });
+        if (wrote[0]) {
+            changed(ChangeOp.SET, List.of(key), 1);
+            enforceCapacity();
+        }
+        return result;
+    }
+
+    private void checkCapacityInTx(Connection conn, String key) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM cache WHERE namespace = ?")) {
+            ps.setString(1, namespace);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                if (rs.getLong(1) >= maxKeys) {
+                    throw new CacheFullException("Cache is full (keys=" + rs.getLong(1) + ", max=" + maxKeys + ")");
+                }
+                if (rs.getLong(2) >= maxBytes) {
+                    throw new CacheFullException("Cache is full (bytes=" + rs.getLong(2) + ", max=" + maxBytes + ")");
+                }
+            }
+        }
+    }
+
+    private static void requireField(String field) {
+        if (field == null) {
+            throw new IllegalArgumentException("hash field names must not be null");
+        }
+    }
+
+    /**
+     * Atomically sets one field of the JSON object at {@code key}. A missing (or expired) key is
+     * created as a new object with <b>no expiry</b>. Equivalent to
+     * {@code hset(key, field, value, null)}.
+     *
+     * @param key the key
+     * @param field the field name (taken literally: {@code "a.b"} is a top-level field)
+     * @param value the field value, encoded as JSON
+     * @return true if the field was new, false if it replaced a value
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public boolean hset(String key, String field, Object value) {
+        return hset(key, field, value, null);
+    }
+
+    /**
+     * Atomically sets one field of the JSON object at {@code key}. A missing (or expired) key is
+     * created as a new object, with {@code ttlIfCreated} as its expiry (null: none); that TTL is
+     * ignored for an existing key, whose expiry a field write never changes.
+     *
+     * @param key the key
+     * @param field the field name (taken literally)
+     * @param value the field value, encoded as JSON
+     * @param ttlIfCreated the TTL to give a newly created key, or null
+     * @return true if the field was new, false if it replaced a value
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public boolean hset(String key, String field, Object value, Duration ttlIfCreated) {
+        checkNotClosed();
+        requireField(field);
+        String encoded = JsonSupport.encodeFieldValue(value);
+        if (!json1) {
+            return rmwHash(key, ttlIfCreated, true, doc -> {
+                boolean created = !doc.has(field);
+                doc.set(field, readExact(encoded));
+                return entry(true, created);
+            });
+        }
+        capacityCheck(key);
+        long now = System.currentTimeMillis();
+        Map<String, Object> p = hashParams(key, now, ttlIfCreated);
+        p.put("f0", field);
+        p.put("v0", encoded);
+        String setExpr = "json_set(" + DOC + ", " + path("f0") + ", json(:v0))";
+        boolean created = inImmediate(conn -> {
+            if (run(conn, upsertHashSql(setExpr, "json_object(:f0, json(:v0))",
+                    "(" + fieldType("f0") + " IS NULL AND " + IS_OBJ + ")"), p) == 1) {
+                return true;
+            }
+            int n = run(conn, "UPDATE cache SET value = CAST(" + setExpr + " AS BLOB), size_bytes = length(CAST(" + setExpr
+                    + " AS BLOB)), last_accessed = :now, access_count = access_count + 1 WHERE namespace = :ns AND key = :key AND "
+                    + LIVE + " AND " + IS_OBJ, p);
+            if (n == 0) {
+                checkHashType(conn, key, now);
+            }
+            return false;
+        });
+        changed(ChangeOp.SET, List.of(key), 1);
+        enforceCapacity();
+        return created;
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode readExact(String json) {
+        try {
+            return JsonSupport.EXACT.readTree(json);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new SerializationException("invalid JSON: " + e.getOriginalMessage(), e);
+        }
+    }
+
+    /**
+     * Sets a field only if it is absent, atomically. A missing key is created as by
+     * {@link #hset(String, String, Object, Duration)}.
+     *
+     * @param key the key
+     * @param field the field name
+     * @param value the field value
+     * @param ttlIfCreated the TTL for a newly created key, or null
+     * @return true if the field was set
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public boolean hsetnx(String key, String field, Object value, Duration ttlIfCreated) {
+        checkNotClosed();
+        requireField(field);
+        String encoded = JsonSupport.encodeFieldValue(value);
+        if (!json1) {
+            return rmwHash(key, ttlIfCreated, true, doc -> {
+                if (doc.has(field)) {
+                    return entry(false, false);
+                }
+                doc.set(field, readExact(encoded));
+                return entry(true, true);
+            });
+        }
+        capacityCheck(key);
+        long now = System.currentTimeMillis();
+        Map<String, Object> p = hashParams(key, now, ttlIfCreated);
+        p.put("f0", field);
+        p.put("v0", encoded);
+        boolean won = inImmediate(conn -> {
+            if (run(conn, upsertHashSql("json_set(" + DOC + ", " + path("f0") + ", json(:v0))", "json_object(:f0, json(:v0))",
+                    "(" + fieldType("f0") + " IS NULL AND " + IS_OBJ + ")"), p) == 1) {
+                return true;
+            }
+            checkHashType(conn, key, now);
+            return false;
+        });
+        if (won) {
+            changed(ChangeOp.SET, List.of(key), 1);
+            enforceCapacity();
+        }
+        return won;
+    }
+
+    /**
+     * Sets a field only if it is absent; a missing key gets no expiry.
+     *
+     * @param key the key
+     * @param field the field name
+     * @param value the field value
+     * @return true if the field was set
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public boolean hsetnx(String key, String field, Object value) {
+        return hsetnx(key, field, value, null);
+    }
+
+    /**
+     * Sets several fields at once, atomically (Redis' multi-field HSET): all land in one
+     * transaction or none do.
+     *
+     * @param key the key
+     * @param fields the fields to set, in order
+     * @param ttlIfCreated the TTL for a newly created key, or null
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public void hsetMany(String key, Map<String, ?> fields, Duration ttlIfCreated) {
+        checkNotClosed();
+        List<Map.Entry<String, String>> entries = new ArrayList<>();
+        for (Map.Entry<String, ?> e : fields.entrySet()) {
+            requireField(e.getKey());
+            entries.add(Map.entry(e.getKey(), JsonSupport.encodeFieldValue(e.getValue())));
+        }
+        if (entries.isEmpty()) {
+            return;
+        }
+        if (!json1) {
+            rmwHash(key, ttlIfCreated, true, doc -> {
+                for (Map.Entry<String, String> e : entries) {
+                    doc.set(e.getKey(), readExact(e.getValue()));
+                }
+                return entry(true, null);
+            });
+            return;
+        }
+        capacityCheck(key);
+        long now = System.currentTimeMillis();
+        inImmediate(conn -> {
+            // SQLite caps function arguments and bound variables, so a large mapping is applied as
+            // several statements -- each json_set nested over groups of pairs -- in one transaction.
+            for (int start = 0; start < entries.size(); start += HSET_MANY_PER_STATEMENT) {
+                int end = Math.min(start + HSET_MANY_PER_STATEMENT, entries.size());
+                Map<String, Object> p = hashParams(key, now, ttlIfCreated);
+                String liveDoc = DOC;
+                String freshDoc = "'{}'";
+                for (int g = start; g < end; g += JSON_SET_PAIRS) {
+                    List<String> pairs = new ArrayList<>();
+                    for (int i = g; i < Math.min(g + JSON_SET_PAIRS, end); i++) {
+                        p.put("f" + i, entries.get(i).getKey());
+                        p.put("v" + i, entries.get(i).getValue());
+                        pairs.add(path("f" + i) + ", json(:v" + i + ")");
+                    }
+                    String joined = String.join(", ", pairs);
+                    liveDoc = "json_set(" + liveDoc + ", " + joined + ")";
+                    freshDoc = "json_set(" + freshDoc + ", " + joined + ")";
+                }
+                if (run(conn, upsertHashSql(liveDoc, freshDoc, IS_OBJ), p) == 0) {
+                    checkHashType(conn, key, now);
+                }
+            }
+            return null;
+        });
+        changed(ChangeOp.SET, List.of(key), 1);
+        enforceCapacity();
+    }
+
+    /**
+     * Sets several fields at once, atomically; a missing key gets no expiry.
+     *
+     * @param key the key
+     * @param fields the fields to set
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public void hsetMany(String key, Map<String, ?> fields) {
+        hsetMany(key, fields, null);
+    }
+
+    /** One field's JSON text per requested field (null where missing), or null for a missing key. */
+    private List<String> hmgetRaw(String key, List<String> fields) {
+        checkNotClosed();
+        for (String f : fields) {
+            requireField(f);
+        }
+        long now = System.currentTimeMillis();
+        try {
+            return dataSource.executeQuery(conn -> {
+                List<String> out = new ArrayList<>();
+                if (!json1) {
+                    ObjectNode doc = loadHash(conn, key, now);
+                    recordHashRead(key, now, doc != null);
+                    if (doc == null) {
+                        return null;
+                    }
+                    for (String f : fields) {
+                        out.add(doc.has(f) ? JsonSupport.write(doc.get(f)) : null);
+                    }
+                    return out;
+                }
+                Map<String, Object> p = hashParams(key, now, null);
+                StringBuilder cols = new StringBuilder();
+                for (int i = 0; i < fields.size(); i++) {
+                    p.put("f" + i, fields.get(i));
+                    cols.append(", CASE WHEN ").append(IS_OBJ).append(" THEN ").append(DOC).append(" -> ")
+                            .append(path("f" + i)).append(" END");
+                }
+                try (PreparedStatement ps = NamedSql.of("SELECT cache.value_type, " + ROOT_TYPE + cols
+                        + " FROM cache WHERE namespace = :ns AND key = :key AND " + LIVE).prepare(conn, p);
+                        ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        recordHashRead(key, now, false);
+                        return null;
+                    }
+                    if (!(rs.getInt(1) == TypeCode.JSON && "object".equals(rs.getString(2)))) {
+                        throw wrongType(key, rs.getInt(1), rs.getString(2));
+                    }
+                    for (int i = 0; i < fields.size(); i++) {
+                        out.add(rs.getString(3 + i));
+                    }
+                }
+                recordHashRead(key, now, true);
+                return out;
+            });
+        } catch (SQLException e) {
+            throw new LyteCacheException("hget failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Returns one field of the JSON object at {@code key} as its natural Java type (String, Long,
+     * Double, Boolean, Map, List), or null for a missing key, missing field, expired key or a
+     * stored JSON null. Never throws on a miss.
+     *
+     * @param key the key
+     * @param field the field name
+     * @return the field value, or null
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public Object hget(String key, String field) {
+        List<String> raw = hmgetRaw(key, List.of(field));
+        return raw == null || raw.get(0) == null ? null : JsonSupport.decodeNatural(raw.get(0));
+    }
+
+    /**
+     * Returns one field decoded into {@code type} with Jackson, or null on any miss.
+     *
+     * @param <T> the target type
+     * @param key the key
+     * @param field the field name
+     * @param type the target class
+     * @return the decoded field, or null
+     * @throws SerializationException if {@code key} is not a JSON object or the field cannot be decoded
+     */
+    public <T> T hget(String key, String field, Class<T> type) {
+        List<String> raw = hmgetRaw(key, List.of(field));
+        return raw == null || raw.get(0) == null ? null : JsonSupport.decode(raw.get(0), type);
+    }
+
+    /**
+     * Typed convenience for {@link #hget(String, String, Class)}.
+     *
+     * @param key the key
+     * @param field the field name
+     * @return the field as a String, or null
+     */
+    public String hgetString(String key, String field) {
+        return hget(key, field, String.class);
+    }
+
+    /**
+     * Typed convenience for {@link #hget(String, String, Class)}.
+     *
+     * @param key the key
+     * @param field the field name
+     * @return the field as a Long, or null
+     */
+    public Long hgetLong(String key, String field) {
+        return hget(key, field, Long.class);
+    }
+
+    /**
+     * Returns several fields in order, with null for each one that is missing.
+     *
+     * @param key the key
+     * @param fields the field names
+     * @return the values, one per field
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public List<Object> hmget(String key, List<String> fields) {
+        List<Object> out = new ArrayList<>();
+        if (fields.isEmpty()) {
+            return out;
+        }
+        List<String> raw = hmgetRaw(key, fields);
+        for (int i = 0; i < fields.size(); i++) {
+            String v = raw == null ? null : raw.get(i);
+            out.add(v == null ? null : JsonSupport.decodeNatural(v));
+        }
+        return out;
+    }
+
+    /**
+     * Returns the whole object at {@code key}, in document order (empty if missing).
+     *
+     * @param key the key
+     * @return an insertion-ordered map of the fields
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public Map<String, Object> hgetAll(String key) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : hashEntries(key, true)) {
+            out.put(e.getKey(), JsonSupport.decodeNatural(e.getValue()));
+        }
+        return out;
+    }
+
+    /**
+     * Removes fields and returns how many were present and removed. Unlike Redis, removing the
+     * last field leaves an empty object rather than deleting the key. A missing key returns 0.
+     *
+     * @param key the key
+     * @param fields the fields to remove
+     * @return the number removed
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public int hdel(String key, String... fields) {
+        checkNotClosed();
+        List<String> unique = new ArrayList<>(new LinkedHashSet<>(Arrays.asList(fields)));
+        for (String f : unique) {
+            requireField(f);
+        }
+        if (unique.isEmpty()) {
+            return 0;
+        }
+        if (!json1) {
+            return rmwHash(key, null, false, doc -> {
+                int n = 0;
+                for (String f : unique) {
+                    if (doc.remove(f) != null) {
+                        n++;
+                    }
+                }
+                return entry(n > 0, n);
+            });
+        }
+        long now = System.currentTimeMillis();
+        String removeExpr = "json_remove(" + DOC + ", " + path("f0") + ")";
+        String sql = "UPDATE cache SET value = CAST(" + removeExpr + " AS BLOB), size_bytes = length(CAST(" + removeExpr
+                + " AS BLOB)), last_accessed = :now, access_count = access_count + :bump WHERE namespace = :ns AND key = :key AND "
+                + LIVE + " AND " + fieldType("f0") + " IS NOT NULL";
+        int removed = inImmediate(conn -> {
+            int n = 0;
+            for (String f : unique) {
+                Map<String, Object> p = hashParams(key, now, null);
+                p.put("f0", f);
+                p.put("bump", n == 0 ? 1L : 0L); // one hdel call is one access
+                n += run(conn, sql, p);
+            }
+            if (n == 0) {
+                checkHashType(conn, key, now);
+            }
+            return n;
+        });
+        if (removed > 0) {
+            changed(ChangeOp.SET, List.of(key), 1);
+        }
+        return removed;
+    }
+
+    /**
+     * Whether {@code key} is a live JSON object containing {@code field}.
+     *
+     * @param key the key
+     * @param field the field name
+     * @return true if present
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public boolean hexists(String key, String field) {
+        List<String> raw = hmgetRaw(key, List.of(field));
+        return raw != null && raw.get(0) != null;
+    }
+
+    /**
+     * Field names in document order (empty if missing).
+     *
+     * @param key the key
+     * @return the field names
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public List<String> hkeys(String key) {
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, String> e : hashEntries(key, false)) {
+            out.add(e.getKey());
+        }
+        return out;
+    }
+
+    /**
+     * Field values in document order, as natural Java types (empty if missing).
+     *
+     * @param key the key
+     * @return the values
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public List<Object> hvals(String key) {
+        List<Object> out = new ArrayList<>();
+        for (Map.Entry<String, String> e : hashEntries(key, true)) {
+            out.add(JsonSupport.decodeNatural(e.getValue()));
+        }
+        return out;
+    }
+
+    /**
+     * The number of fields (0 if missing).
+     *
+     * @param key the key
+     * @return the field count
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public int hlen(String key) {
+        return hashEntries(key, false).size();
+    }
+
+    private List<Map.Entry<String, String>> hashEntries(String key, boolean withValues) {
+        checkNotClosed();
+        long now = System.currentTimeMillis();
+        try {
+            return dataSource.executeQuery(conn -> {
+                List<Map.Entry<String, String>> out = new ArrayList<>();
+                if (!json1) {
+                    ObjectNode doc = loadHash(conn, key, now);
+                    if (doc != null) {
+                        lruBuffer.put(key, now);
+                        Iterator<Map.Entry<String, com.fasterxml.jackson.databind.JsonNode>> it = doc.fields();
+                        while (it.hasNext()) {
+                            Map.Entry<String, com.fasterxml.jackson.databind.JsonNode> e = it.next();
+                            out.add(Map.entry(e.getKey(), JsonSupport.write(e.getValue())));
+                        }
+                    }
+                    return out;
+                }
+                String valueCol = withValues ? "CASE WHEN j.key IS NOT NULL THEN " + DOC + " -> j.fullkey END" : "NULL";
+                try (PreparedStatement ps = NamedSql.of("SELECT cache.value_type, " + ROOT_TYPE + ", j.key, " + valueCol
+                        + " FROM cache LEFT JOIN json_each(CASE WHEN " + IS_OBJ + " THEN " + DOC + " ELSE '{}' END) AS j "
+                        + "WHERE cache.namespace = :ns AND cache.key = :key AND " + LIVE).prepare(conn, hashParams(key, now, null));
+                        ResultSet rs = ps.executeQuery()) {
+                    boolean first = true;
+                    while (rs.next()) {
+                        if (first && !(rs.getInt(1) == TypeCode.JSON && "object".equals(rs.getString(2)))) {
+                            throw wrongType(key, rs.getInt(1), rs.getString(2));
+                        }
+                        if (first) {
+                            lruBuffer.put(key, now);
+                        }
+                        first = false;
+                        String k = rs.getString(3);
+                        if (k != null) {
+                            String v = rs.getString(4);
+                            out.add(new AbstractMap.SimpleImmutableEntry<>(k, v == null ? "null" : v));
+                        }
+                    }
+                }
+                return out;
+            });
+        } catch (SQLException e) {
+            throw new LyteCacheException("hash read failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Atomically adds {@code amount} to an integer field and returns the new value. A missing field
+     * starts at 0; a missing key is created with no expiry.
+     *
+     * @param key the key
+     * @param field the field name
+     * @param amount the amount to add (may be negative)
+     * @return the new value
+     * @throws IllegalStateException if the field holds anything but a JSON integer
+     * @throws ArithmeticException if the result would overflow a long (nothing is written)
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public long hincrBy(String key, String field, long amount) {
+        return Long.parseLong(hincr(key, field, amount, true));
+    }
+
+    /**
+     * Atomically adds {@code amount} to a numeric (integer or float) field and returns the new
+     * value, stored as a float.
+     *
+     * @param key the key
+     * @param field the field name
+     * @param amount a finite amount to add
+     * @return the new value
+     * @throws IllegalStateException if the field holds anything but a JSON number
+     * @throws ArithmeticException if the result would overflow a double (nothing is written)
+     * @throws SerializationException if {@code key} holds anything but a JSON object
+     */
+    public double hincrByFloat(String key, String field, double amount) {
+        if (!Double.isFinite(amount)) {
+            throw new IllegalArgumentException("hincrByFloat amount must be finite");
+        }
+        return Double.parseDouble(hincr(key, field, amount, false));
+    }
+
+    private String hincr(String key, String field, Number amount, boolean integer) {
+        checkNotClosed();
+        requireField(field);
+        String kind = integer ? "an integer" : "a number";
+        if (!json1) {
+            return rmwHash(key, null, true, doc -> {
+                com.fasterxml.jackson.databind.JsonNode cur = doc.has(field) ? doc.get(field) : null;
+                if (integer) {
+                    if (cur != null && !(cur.isIntegralNumber() && cur.canConvertToLong())) {
+                        if (cur.isIntegralNumber()) {
+                            throw new ArithmeticException("incrementing field '" + field + "' of key '" + key + "' would overflow");
+                        }
+                        throw new IllegalStateException("hash field '" + field + "' of key '" + key + "' is not " + kind);
+                    }
+                    long next = Math.addExact(cur == null ? 0 : cur.longValue(), amount.longValue());
+                    doc.put(field, next);
+                    return entry(true, Long.toString(next));
+                }
+                if (cur != null && !cur.isNumber()) {
+                    throw new IllegalStateException("hash field '" + field + "' of key '" + key + "' is not " + kind);
+                }
+                double next = (cur == null ? 0 : cur.doubleValue()) + amount.doubleValue();
+                if (!Double.isFinite(next)) {
+                    throw new ArithmeticException("incrementing field '" + field + "' of key '" + key + "' would overflow");
+                }
+                doc.put(field, new java.math.BigDecimal(Double.toString(next)));
+                return entry(true, Double.toString(next));
+            });
+        }
+        capacityCheck(key);
+        long now = System.currentTimeMillis();
+        Map<String, Object> p = hashParams(key, now, null);
+        p.put("f0", field);
+        p.put("amount", integer ? (Object) amount.longValue() : (Object) amount.doubleValue());
+        String stored = "json_extract(" + DOC + ", " + path("f0") + ")";
+        String newVal = integer ? "(COALESCE(" + stored + ", 0) + :amount)" : "(CAST(COALESCE(" + stored + ", 0) AS REAL) + :amount)";
+        String guard = integer
+                ? "COALESCE(" + fieldType("f0") + ", 'integer') = 'integer' AND typeof(" + newVal + ") = 'integer'"
+                : "COALESCE(" + fieldType("f0") + ", 'real') IN ('integer', 'real') AND " + newVal
+                        + " BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308";
+        String storedVal = integer ? newVal : "json(" + floatText(newVal) + ")";
+        String sql = upsertHashSql("json_set(" + DOC + ", " + path("f0") + ", " + storedVal + ")", "json_object(:f0, :amount)",
+                "(CASE WHEN " + IS_OBJ + " THEN (" + guard + ") ELSE 0 END)")
+                + " RETURNING " + (integer ? "CAST(json_extract(CAST(value AS TEXT), " + path("f0") + ") AS TEXT)"
+                        : "json_extract(CAST(value AS TEXT), " + path("f0") + ")");
+        String result = inImmediate(conn -> {
+            try (PreparedStatement ps = NamedSql.of(sql).prepare(conn, p); ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return integer ? rs.getString(1) : Double.toString(rs.getDouble(1));
+                }
+            }
+            checkHashType(conn, key, now);
+            String ft;
+            try (PreparedStatement ps = NamedSql.of("SELECT " + fieldType("f0") + " FROM cache WHERE namespace = :ns AND key = :key")
+                    .prepare(conn, p); ResultSet rs = ps.executeQuery()) {
+                ft = rs.next() ? rs.getString(1) : null;
+            }
+            if ((integer && "integer".equals(ft)) || (!integer && ("integer".equals(ft) || "real".equals(ft)))) {
+                throw new ArithmeticException("incrementing field '" + field + "' of key '" + key + "' would overflow");
+            }
+            throw new IllegalStateException("hash field '" + field + "' of key '" + key + "' holds a JSON " + ft + ", not " + kind);
+        });
+        changed(ChangeOp.SET, List.of(key), 1);
+        enforceCapacity();
+        return result;
+    }
+
+    private void recordHashRead(String key, long now, boolean found) {
+        if (found) {
+            recordHit();
+            lruBuffer.put(key, now);
+        } else {
+            recordMiss();
+        }
+    }
+
+    // -- events: local notification (notify / watch) ------------------------------------------
+    //
+    // SINGLE HOST ONLY. POLLED, NOT PUSHED. DURABLE. Not Redis Pub/Sub: events are rows in the
+    // `events` table with a monotonic seq; watchers on the same machine poll it (every 50 ms by
+    // default, backing off to ~1 s when idle). See docs/notifications.md.
+
+    private static final String CACHE_CHANNEL = "__cache__";
+    private static final String EVENTS_DDL = """
+            CREATE TABLE IF NOT EXISTS events (
+              seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+              channel    TEXT    NOT NULL,
+              namespace  TEXT    NOT NULL DEFAULT 'default',
+              payload    BLOB,
+              value_type INTEGER NOT NULL DEFAULT 4,
+              created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_events_seq_channel ON events(channel, seq);
+            CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+            INSERT OR IGNORE INTO meta (k, v) VALUES ('events_version', '1')
+            """;
+
+    private void ensureEvents() {
+        if (eventsReady) {
+            return;
+        }
+        try {
+            dataSource.executeUpdate(conn -> {
+                try (Statement s = conn.createStatement()) {
+                    for (String stmt : EVENTS_DDL.split(";")) {
+                        if (!stmt.isBlank()) {
+                            s.executeUpdate(stmt);
+                        }
+                    }
+                }
+                return null;
+            });
+            eventsReady = true;
+        } catch (SQLException e) {
+            throw new LyteCacheException("creating events table failed: " + e.getMessage(), e);
+        }
+    }
+
+    private boolean eventsExist() throws SQLException {
+        if (!eventsReady) {
+            eventsReady = dataSource.executeQuery(conn -> {
+                try (Statement s = conn.createStatement(); ResultSet rs = s.executeQuery(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")) {
+                    return rs.next();
+                }
+            });
+        }
+        return eventsReady;
+    }
+
+    private static void validateChannel(String channel) {
+        if (channel == null || channel.isEmpty()) {
+            throw new IllegalArgumentException("channel must be a non-empty string");
+        }
+        if (channel.contains("*")) {
+            throw new IllegalArgumentException("channel '" + channel + "' may not contain '*' (reserved for watch patterns)");
+        }
+        if (channel.startsWith("__")) {
+            throw new IllegalArgumentException("channel names starting with '__' are reserved: '" + channel + "'");
+        }
+    }
+
+    /**
+     * Publishes an event for watchers <b>on this host</b> and returns its seq.
+     *
+     * <p>Single host only, delivered by polling (not pushed), durable until retention deletes it
+     * (default 1 hour). {@code payload} is encoded exactly like a cached value. Each call is one
+     * write under the same lock as {@link #set}, so a high event rate slows cache writes -- batch
+     * with {@link #notifyMany}. Call it after your own database transaction commits, never inside
+     * one you might roll back.
+     *
+     * @param channel the channel: non-empty, no {@code *}, not starting with {@code __}
+     * @param payload the payload, or null
+     * @return the event's seq
+     */
+    public long notify(String channel, Object payload) {
+        checkNotClosed();
+        validateChannel(channel);
+        return insertEvents(List.of(new Notification(channel, payload))).get(0);
+    }
+
+    /**
+     * Publishes several events in one transaction (one write-lock acquisition), with the same
+     * semantics as {@link #notify(String, Object)}.
+     *
+     * @param events the events, in order
+     * @return their seqs, in order
+     */
+    public List<Long> notifyMany(List<Notification> events) {
+        checkNotClosed();
+        for (Notification n : events) {
+            validateChannel(n.channel());
+        }
+        return events.isEmpty() ? List.of() : insertEvents(events);
+    }
+
+    private List<Long> insertEvents(List<Notification> events) {
+        long now = System.currentTimeMillis();
+        List<Serializer.SerializedValue> encoded = new ArrayList<>();
+        for (Notification n : events) {
+            encoded.add(n.payload() == null
+                    ? new Serializer.SerializedValue("null".getBytes(java.nio.charset.StandardCharsets.UTF_8), TypeCode.JSON)
+                    : serializer.serialize(n.payload()));
+        }
+        ensureEvents();
+        SqlFunction<List<Long>> insertAll = conn -> {
+            List<Long> seqs = new ArrayList<>();
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "INSERT INTO events (channel, namespace, payload, value_type, created_at) VALUES (?, ?, ?, ?, ?) RETURNING seq")) {
+                for (int i = 0; i < events.size(); i++) {
+                    ps.setString(1, events.get(i).channel());
+                    ps.setString(2, namespace);
+                    ps.setBytes(3, encoded.get(i).bytes());
+                    ps.setInt(4, encoded.get(i).typeCode());
+                    ps.setLong(5, now);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        seqs.add(rs.getLong(1));
+                    }
+                }
+            }
+            return seqs;
+        };
+        List<Long> seqs;
+        try {
+            seqs = events.size() == 1 ? dataSource.executeUpdate(insertAll) : null;
+        } catch (SQLException e) {
+            throw new LyteCacheException("notify failed: " + e.getMessage(), e);
+        }
+        if (seqs == null) {
+            seqs = inImmediate(insertAll);
+        }
+        // In-process optimization only: wake this cache's watchers now instead of at their next
+        // poll. The committed row stays the source of truth.
+        for (Subscription s : subscriptions) {
+            s.wake();
+        }
+        return seqs;
+    }
+
+    /**
+     * Subscribes to events published <b>on this host</b> to channels matching {@code patterns},
+     * receiving only events published from now on. See {@link #watch(WatchOptions, String...)}.
+     *
+     * @param patterns exact channel names, or prefixes ending in {@code *}; {@code "*"} matches all
+     * @return a subscription; close it when done
+     */
+    public Subscription watch(String... patterns) {
+        return watch(WatchOptions.defaults(), patterns);
+    }
+
+    /**
+     * Subscribes to events published <b>on this host</b> to channels matching {@code patterns}:
+     * exact names, or a trailing {@code *} for a prefix ({@code "cache:invalidate:*"}); {@code "*"}
+     * matches every channel. Only events from this cache's namespace are seen.
+     *
+     * <p>Single host only; polled (latency about the poll interval, up to about 1 s after an idle
+     * spell); durable and resumable via {@link WatchOptions#fromSeq}. Delivery is at-least-once
+     * from your cursor, in total seq order, to every subscriber (fan-out; no consumer groups) --
+     * handlers must be idempotent. Lost events surface as a {@link GapException}.
+     *
+     * @param options where to start and how often to poll
+     * @param patterns the channel patterns
+     * @return a subscription; close it when done
+     */
+    public Subscription watch(WatchOptions options, String... patterns) {
+        checkNotClosed();
+        if (patterns.length == 0) {
+            throw new IllegalArgumentException("watch() needs at least one channel or pattern");
+        }
+        List<String> list = Arrays.asList(patterns);
+        Subscription.channelFilter(list, new HashMap<>()); // validates
+        ensureEvents();
+        Long fromSeq = options.fromSeqOrNull();
+        long[] start = {0};
+        GapException[] gap = {null};
+        try {
+            dataSource.executeQuery(conn -> {
+                try (Statement s = conn.createStatement()) {
+                    s.execute("BEGIN");
+                }
+                try {
+                    if (fromSeq == null) {
+                        start[0] = Subscription.lastAssignedSeq(conn);
+                    } else if (fromSeq == 0) {
+                        Long oldest = Subscription.oldestSeq(conn);
+                        start[0] = oldest != null ? oldest - 1 : Subscription.lastAssignedSeq(conn);
+                    } else {
+                        start[0] = fromSeq;
+                        gap[0] = Subscription.gapCheck(conn, fromSeq);
+                    }
+                } finally {
+                    try (Statement s = conn.createStatement()) {
+                        s.execute("COMMIT");
+                    }
+                }
+                return null;
+            });
+        } catch (SQLException e) {
+            throw new LyteCacheException("watch failed: " + e.getMessage(), e);
+        }
+        Subscription sub = new Subscription("jdbc:sqlite:" + dbPath.toAbsolutePath(), namespace, list, start[0], gap[0],
+                options.pollIntervalValue(), serializer, subscriptions::remove);
+        subscriptions.add(sub);
+        return sub;
+    }
+
+    /**
+     * Persists a named subscriber cursor (in the {@code meta} table). Save an event's seq after
+     * you have finished handling it, then resume with
+     * {@code watch(WatchOptions.defaults().fromSeq(loadCursor(name).getAsLong()), ...)}. Each save
+     * is a write: on a busy stream save every N events, accepting up to N redeliveries.
+     *
+     * @param name the cursor name
+     * @param seq the seq to store
+     */
+    public void saveCursor(String name, long seq) {
+        checkNotClosed();
+        try {
+            dataSource.executeUpdate(conn -> {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v")) {
+                    ps.setString(1, "cursor:" + namespace + ":" + name);
+                    ps.setString(2, Long.toString(seq));
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (SQLException e) {
+            throw new LyteCacheException("saveCursor failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The cursor last saved under {@code name}.
+     *
+     * @param name the cursor name
+     * @return the stored seq, or empty
+     */
+    public OptionalLong loadCursor(String name) {
+        checkNotClosed();
+        try {
+            return dataSource.executeQuery(conn -> {
+                try (PreparedStatement ps = conn.prepareStatement("SELECT v FROM meta WHERE k = ?")) {
+                    ps.setString(1, "cursor:" + namespace + ":" + name);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        return rs.next() ? OptionalLong.of(Long.parseLong(rs.getString(1))) : OptionalLong.empty();
+                    }
+                }
+            });
+        } catch (SQLException e) {
+            throw new LyteCacheException("loadCursor failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Retention in bounded batches. Always deletes a prefix of the seq range (everything up to the
+     * newest event past retention or beyond the count cap), never a hole, which keeps gap detection
+     * sound even if clocks disagree.
+     */
+    private void sweepEvents(long now) throws SQLException {
+        if (!eventsExist()) {
+            return;
+        }
+        dataSource.executeUpdate(conn -> {
+            Long bound = null;
+            try (PreparedStatement ps = conn.prepareStatement("SELECT max(seq) FROM events WHERE created_at <= ?")) {
+                ps.setLong(1, now - eventRetention.toMillis());
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    long v = rs.getLong(1);
+                    if (!rs.wasNull()) {
+                        bound = v;
+                    }
+                }
+            }
+            if (eventMaxCount > 0) {
+                try (PreparedStatement ps = conn.prepareStatement("SELECT seq FROM events ORDER BY seq DESC LIMIT 1 OFFSET ?")) {
+                    ps.setLong(1, eventMaxCount);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next() && (bound == null || rs.getLong(1) > bound)) {
+                            bound = rs.getLong(1);
+                        }
+                    }
+                }
+            }
+            if (bound == null) {
+                return null;
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM events WHERE seq IN (SELECT seq FROM events WHERE seq <= ? ORDER BY seq LIMIT ?)")) {
+                ps.setLong(1, bound);
+                ps.setInt(2, BATCH_DELETE_LIMIT);
+                while (ps.executeUpdate() >= BATCH_DELETE_LIMIT) {
+                    // keep deleting in bounded batches
+                }
+            }
+            return null;
+        });
+    }
+
+    // -- change listeners (in-process) and auto-publish ------------------------------------------
+
+    /**
+     * Calls {@code listener} after mutations <b>in this process</b> commit, for every operation.
+     * See {@link #onChange(Consumer, Set)}.
+     *
+     * @param listener the listener
+     * @return an unsubscribe action
+     */
+    public Runnable onChange(Consumer<ChangeRecord> listener) {
+        return onChange(listener, EnumSet.allOf(ChangeOp.class));
+    }
+
+    /**
+     * Calls {@code listener} after mutations <b>in this process</b> commit, for the given
+     * operations. In-process only, with no SQLite involvement and effectively zero latency. A
+     * record arrives only after its transaction commits (a rolled-back {@code setAll} notifies
+     * nobody), on a dispatch thread that holds no cache lock, so a slow listener never stalls
+     * writers and a listener may write to the cache. A throwing listener is logged and skipped.
+     * Writes made by listeners can trigger listeners again; past 8 levels those records are dropped
+     * with a warning. Bulk operations produce ONE record. TTL expiry and eviction are not reported.
+     *
+     * @param listener the listener
+     * @param ops the operations to receive
+     * @return an unsubscribe action; once it returns, the listener is never called again
+     */
+    public Runnable onChange(Consumer<ChangeRecord> listener, Set<ChangeOp> ops) {
+        checkNotClosed();
+        ChangeDispatcher d;
+        synchronized (subscriptions) {
+            if (dispatcher == null) {
+                dispatcher = new ChangeDispatcher(); // the first listener starts the thread
+            }
+            d = dispatcher;
+        }
+        return d.add(listener, ops);
+    }
+
+    private void changed(ChangeOp op, List<String> keys, int count) {
+        ChangeDispatcher d = dispatcher;
+        boolean toListeners = d != null && d.wants(op);
+        boolean publish = publishOps.contains(op);
+        if (!toListeners && !publish) {
+            return; // the common case: nothing registered
+        }
+        ChangeRecord record = ChangeRecord.of(op, namespace, keys, count, changeKeyCap);
+        if (toListeners) {
+            d.submit(record);
+        }
+        if (publish) {
+            try {
+                insertEvents(List.of(new Notification(CACHE_CHANNEL, record.toPayload())));
+            } catch (LyteCacheException e) {
+                if (strict) {
+                    throw e;
+                }
+                logger.log(Level.WARNING, "lytecache: failed to publish " + op.wireName() + " change event: " + e.getMessage());
+            }
         }
     }
 
@@ -1131,14 +2420,16 @@ public class LyteCache implements AutoCloseable {
     public void flush() {
         checkNotClosed();
         try {
-            dataSource.executeUpdate(conn -> {
+            int removed = dataSource.executeUpdate(conn -> {
                 String sql = "DELETE FROM cache WHERE namespace = ?";
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, namespace);
-                    ps.executeUpdate();
+                    return ps.executeUpdate();
                 }
-                return null;
             });
+            if (removed > 0) {
+                changed(ChangeOp.FLUSH, null, removed);
+            }
         } catch (SQLException e) {
             throw new LyteCacheException("flush failed: " + e.getMessage(), e);
         }
@@ -1168,7 +2459,7 @@ public class LyteCache implements AutoCloseable {
                         }
                     }
 
-                    return new CacheStats(hits, misses, keyCount, sizeBytes, evictions, expiredRemoved, dbPath);
+                    return new CacheStats(hits, misses, keyCount, sizeBytes, evictions, expiredRemoved, dbPath, hashMode());
                 });
             } catch (SQLException e) {
                 throw new LyteCacheException("stats query failed: " + e.getMessage(), e);
@@ -1199,7 +2490,7 @@ public class LyteCache implements AutoCloseable {
      * @return true if acquired
      */
     boolean tryAcquireLock(String lockKey, String token, Duration ttl) {
-        return add(lockKey, token, ttl);
+        return addInternal(lockKey, token, ttl, false);
     }
 
     /**
@@ -1329,6 +2620,15 @@ public class LyteCache implements AutoCloseable {
         if (closed) return;
         closed = true;
 
+        for (Subscription s : new ArrayList<>(subscriptions)) {
+            s.close();
+        }
+        ChangeDispatcher d = dispatcher;
+        if (d != null) {
+            d.close();
+            dispatcher = null;
+        }
+
         // Flush remaining LRU updates
         flushLruBuffer();
 
@@ -1435,6 +2735,7 @@ public class LyteCache implements AutoCloseable {
 
             // Enforce capacity
             enforceCapacity();
+            sweepEvents(now);
         } catch (Exception e) {
             logger.log(Level.WARNING, "Sweep failed: " + e.getMessage());
         }
@@ -1635,6 +2936,10 @@ public class LyteCache implements AutoCloseable {
         private Duration sweepInterval = Duration.ofSeconds(60);
         private boolean strict = false;
         private Serializer serializer = new DefaultSerializer();
+        private Set<ChangeOp> publishOps = EnumSet.noneOf(ChangeOp.class);
+        private Duration eventRetention = Duration.ofHours(1);
+        private long eventMaxCount = 0;
+        private int changeKeyCap = 100;
 
         /**
          * Creates a new builder with default settings. Obtain one via {@link LyteCache#builder()}
@@ -1728,6 +3033,64 @@ public class LyteCache implements AutoCloseable {
          */
         public Builder serializer(Serializer serializer) {
             this.serializer = serializer;
+            return this;
+        }
+
+        /**
+         * Makes the given mutations also publish a {@link ChangeRecord} event to the reserved
+         * {@code __cache__} channel, for watchers in other processes on this host. Off by default.
+         * Each published mutation costs one extra event row written under the write lock (one per
+         * call, not per key), and delivery is polled, not immediate -- for in-process reactions
+         * use {@link LyteCache#onChange} instead.
+         *
+         * @param ops the operations to publish
+         * @return this builder
+         */
+        public Builder publishChanges(ChangeOp... ops) {
+            this.publishOps = ops.length == 0 ? EnumSet.noneOf(ChangeOp.class) : EnumSet.copyOf(Arrays.asList(ops));
+            return this;
+        }
+
+        /**
+         * How long events are kept before the sweeper deletes them, read or not (default 1 hour). A
+         * subscriber offline for longer loses events, and is told so with a {@link GapException}.
+         *
+         * @param retention a positive duration
+         * @return this builder
+         */
+        public Builder eventRetention(Duration retention) {
+            if (retention == null || retention.isZero() || retention.isNegative()) {
+                throw new IllegalArgumentException("eventRetention must be positive");
+            }
+            this.eventRetention = retention;
+            return this;
+        }
+
+        /**
+         * Additionally keeps at most the newest {@code n} events (default: no count cap).
+         *
+         * @param n the cap, or 0 for none
+         * @return this builder
+         */
+        public Builder eventMaxCount(long n) {
+            if (n < 0) {
+                throw new IllegalArgumentException("eventMaxCount must be >= 0");
+            }
+            this.eventMaxCount = n;
+            return this;
+        }
+
+        /**
+         * How many keys a {@link ChangeRecord} lists before it is truncated (default 100).
+         *
+         * @param cap the cap, {@code >= 0}
+         * @return this builder
+         */
+        public Builder changeKeyCap(int cap) {
+            if (cap < 0) {
+                throw new IllegalArgumentException("changeKeyCap must be >= 0");
+            }
+            this.changeKeyCap = cap;
             return this;
         }
 

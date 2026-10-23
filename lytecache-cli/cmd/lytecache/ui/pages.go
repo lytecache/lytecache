@@ -11,14 +11,22 @@ type Page struct {
 	CSRFToken   string
 	AllowDelete bool
 
-	Databases  []string // every configured database name, for the sidebar switcher
-	CurrentDB  string
-	CurrentNS  string
-	Namespaces []SidebarNamespace
+	Databases []string // every configured database name, for the sidebar switcher
+	CurrentDB string
+	CurrentNS string
+	// CurrentView is "events" on the Events tab (for the sidebar highlight).
+	CurrentView string
+	Namespaces  []SidebarNamespace
+	// EventsEnabled is whether the current database's file has an events
+	// table; without one the sidebar shows the Events tab greyed out.
+	EventsEnabled bool
 
 	// RefreshSeconds, when non-zero, makes static/poll.js auto-refresh
 	// the page (pausable, see the checkbox in dashboard.html).
 	RefreshSeconds int
+	// AdaptiveRefresh makes poll.js refresh with the library subscribers'
+	// backoff scheme instead of a fixed interval (the Events tab).
+	AdaptiveRefresh bool
 }
 
 // SidebarNamespace is one row of the sidebar's namespace list.
@@ -56,6 +64,9 @@ func (s *Server) dbPage(r *http.Request, dbName, ns string) Page {
 	c, err := e.Cache("default")
 	if err != nil {
 		return p
+	}
+	if info, err := c.EventStats(); err == nil {
+		p.EventsEnabled = info.Enabled
 	}
 	infos, err := c.Namespaces()
 	if err != nil {

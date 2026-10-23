@@ -7,6 +7,8 @@ This document defines the storage schema and type encoding for LyteCache. It is 
 - **Current**: 1
 - **Compatibility**: Higher versions will be rejected on open with `SchemaVersionException`.
 
+- **Events table**: a file may also contain an `events` table and an `('events_version', '1')` row in `meta`, created the first time `notify`/`watch` is used. This is "schema version 2" in the root [SPEC.md](../SPEC.md#schema-versions). It is purely additive, so `schema_version` stays `1` and older libraries keep opening the file.
+
 ## Database Schema
 
 ```sql
@@ -252,3 +254,24 @@ int timeout = node.get("timeout").asInt(); // 30
 ---
 
 All implementations must adhere to this spec to ensure interoperability.
+
+## Events and Hashes
+
+The normative rules for both features live in the root [SPEC.md](../SPEC.md): the
+`events` table and polling query, delivery semantics, the gap rule, change records,
+the hash path construction, type guards, TTL and `size_bytes` handling, and the JSON1
+fallback. This implementation follows them exactly. The Java-specific surface:
+
+**Events** (single host only, polled, durable; see [docs/notifications.md](../docs/notifications.md)):
+- `long notify(String, Object)` and `List<Long> notifyMany(List<Notification>)`: the payload goes through the configured `Serializer`; null is stored as JSON `null`.
+- `watch(String...)` and `watch(WatchOptions, String...)`: one daemon `lytecache-watch` thread and one `query_only` connection per subscription. `Subscription` is `Iterable<Event>` and `AutoCloseable`, with `poll(Duration)`, `tryNext()`, and the push form `onEvent(Consumer)` with `onGap(Consumer)`. `Event.payload()` returns the natural type; `payload(Class)` decodes like `get`.
+- `onChange(Consumer<ChangeRecord>[, Set<ChangeOp>])` returns a `Runnable` that unsubscribes. There is one daemon `lytecache-dispatch` thread, and the depth guard is a `ThreadLocal`.
+- Builder options: `publishChanges(ChangeOp...)`, `eventRetention(Duration)`, `eventMaxCount(long)`, `changeKeyCap(int)`.
+
+**Hashes** (atomic field writes over value_type-4 JSON objects; no schema change):
+- `hset`, `hsetnx`, `hsetMany` (each with a `Duration ttlIfCreated` overload), `hget(key, field)` (natural type: `Long`, `Double`, `String`, `Boolean`, `Map`, `List`), `hget(key, field, Class)`, `hgetString`, `hgetLong`, `hmget`, `hgetAll` (insertion-ordered), `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincrBy`, `hincrByFloat`.
+- Field values are encoded with the same Jackson configuration as type-code-4 values; `byte[]` and non-finite doubles are rejected.
+- The SQL uses `:name` parameters (bound as SQLite `?NNN` slots, so each name binds once).
+
+`hashMode()` / `CacheStats.hashMode()` reports `"json1"` or `"fallback"`. `LYTECACHE_FORCE_JSON_FALLBACK=1` (or the system property `lytecache.forceJsonFallback`) forces the fallback.
+

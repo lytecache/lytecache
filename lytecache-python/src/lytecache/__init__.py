@@ -1,8 +1,10 @@
 """lytecache: Redis-like caching with zero infrastructure, backed by SQLite."""
 
+from ._events import ChangeRecord, Event, Subscription
 from .core import LyteCache
 from .exceptions import (
     CacheFullError,
+    GapError,
     LockTimeout,
     LyteCacheError,
     SchemaVersionError,
@@ -18,5 +20,9 @@ __all__ = [
     "SerializationError",
     "SchemaVersionError",
     "LockTimeout",
+    "GapError",
+    "Event",
+    "Subscription",
+    "ChangeRecord",
     "__version__",
 ]

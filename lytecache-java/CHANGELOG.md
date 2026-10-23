@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Hash operations on JSON object values: `hset`, `hsetnx`, `hsetMany`, `hget` (natural and
+  typed), `hgetString`, `hgetLong`, `hmget`, `hgetAll`, `hdel`, `hexists`, `hkeys`, `hvals`,
+  `hlen`, `hincrBy`, `hincrByFloat`, plus `hashMode()` and `CacheStats.hashMode()`. Writes
+  are computed inside SQLite, so concurrent field updates are never lost. No schema change.
+- Local event notification: `notify`, `notifyMany`, `watch` (returns a `Subscription`:
+  `Iterable<Event>`, `poll`, `tryNext`, `onEvent`/`onGap`, `close`), `WatchOptions`,
+  `saveCursor`, `loadCursor`, `GapException`, `Event`, `Notification`. Single host only,
+  polled, durable. The `events` table is created on first use; `schema_version` stays 1.
+- `onChange(...)`: in-process change listeners, one `ChangeRecord` per call; `ChangeOp`.
+- Builder options `publishChanges`, `eventRetention`, `eventMaxCount`, `changeKeyCap`.
+
+### Changed
+
+- `org.xerial:sqlite-jdbc` 3.44.0.0 → 3.53.4.0. SQLite 3.44 mishandles escaped quotes in
+  JSON path labels, which hash operations rely on.
+- `CacheStats` gained a `hashMode` component; the previous 7-argument constructor remains.
+
 ## [0.2.0] - 2026-07-07
 
 Initial release. Embedded, Redis-like caching backed by SQLite (via `org.xerial:sqlite-jdbc`),

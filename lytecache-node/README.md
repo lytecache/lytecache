@@ -45,8 +45,74 @@ That's it. The first call to `new LyteCache()` creates the database file (includ
 | `memoize(key, ttlSeconds, loader)` / `memoizeAsync(...)` | Read-through cache for a computed value. |
 | `wrap(fn, { ttl })` | Returns a memoized version of a function. |
 | `lock(name, { timeoutMs, pollMs })` | Process-safe distributed lock; disposable via `.release()` or `Symbol.dispose`. |
+| `hset(key, field, value, { ttl })` / `hsetMany` / `hsetnx` | Atomically set field(s) of a JSON object value. See [Hashes](#hashes). |
+| `hget(key, field, default)` / `hmget` / `hgetAll` | Read fields without decoding the rest of the document. |
+| `hdel` / `hexists` / `hkeys` / `hvals` / `hlen` | Remove, test or list fields. |
+| `hincrby(key, field, n)` / `hincrbyfloat` | Atomic counters inside a JSON object. |
+| `notify(channel, payload)` / `notifyMany` | Publish a local event (single host, polled, durable). See [Events](#events-local-notification). |
+| `watch(channels, { fromSeq, pollInterval })` | Subscribe: `for await`, `.on("event")`, `next(ms)`, `tryNext()`; `close()` or `using`. |
+| `saveCursor(name, seq)` / `loadCursor(name)` | Persist a subscriber position for durable resume. |
+| `onChange(listener, { events })` | In-process callback after each committed mutation. |
 
 `LyteCache` and the object returned by `lock()` both implement `Symbol.dispose`, so `using cache = new LyteCache()` works on a new enough Node/TypeScript.
+
+## Hashes
+
+`hset` and friends update single fields of a stored JSON object **atomically**. The new
+document is computed inside SQLite from the row's current value, so concurrent writers
+(including other processes) to different fields, or `hincrby` on the same field, never lose
+each other's work. A `get` → modify → `set` in application code would.
+
+```ts
+cache.hset("user:101", "status", "active"); // true: the field was new
+cache.hincrby("user:101", "logins");        // atomic counter inside the document
+cache.hget("user:101", "status");           // "active"
+```
+
+- **A hash is just a JSON value.** `set(key, {...})` is usable with `hget`, and `get`
+  returns the whole document.
+- **Missing keys are created** with no expiry, unless you pass `{ ttl }`, which applies
+  only on creation. Field writes never change an existing key's TTL, and expired keys are
+  never revived.
+- **Field names are literal top-level keys** (`"a.b"` is not a path). Key order is
+  preserved, including integer-like keys.
+- **Errors:** a non-object value throws `SerializationError` and is left untouched;
+  `hincrby` on a non-integer field throws `TypeError`; leaving the int64 range throws
+  `RangeError`, with nothing written. Results beyond `Number.MAX_SAFE_INTEGER` come back
+  as `bigint`.
+- **SQLite version:** better-sqlite3 bundles SQLite with JSON1, so `hashMode` is
+  `"json1"`. On an SQLite without it, the hash methods fall back to read-modify-write
+  under `BEGIN IMMEDIATE`. JSONB is never used.
+
+## Events (local notification)
+
+Processes sharing one cache file **on one machine** can notify each other. The typical
+case is invalidating in-memory state across workers:
+
+```ts
+// worker A, after committing a DB change
+cache.delete("balance:42");
+cache.notify("invalidate", { key: "balance:42" });
+
+// workers B..N
+using sub = cache.watch("invalidate");
+for await (const event of sub) localMemo.delete(event.payload.key);
+```
+
+This is **not Redis Pub/Sub**. It is single host only, polled (about the 50 ms poll
+interval; up to about 1 s after an idle spell), and durable: events are rows with a
+monotonic `seq`, so `watch(..., { fromSeq: cursor })` resumes after a restart. Delivery
+is at-least-once, so handlers must be idempotent. Events are kept for `eventRetention`
+seconds (default 3600). A subscriber that falls further behind gets a `GapError`, never
+a silent skip.
+
+An open subscription keeps its polling timer, and so the process, alive until you
+`close()` it. It is opt-in: no table and no timer exist until you use it.
+
+`onChange(listener)` is the in-process, immediate alternative. `publishChanges:
+["delete", "flush"]` publishes those mutations to the reserved `__cache__` channel for
+other processes. Bulk operations emit one record, not one per key. Full guide:
+[docs/notifications.md](../docs/notifications.md).
 
 ## Why synchronous?
 

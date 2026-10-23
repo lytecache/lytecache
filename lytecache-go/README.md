@@ -50,8 +50,79 @@ That's it. The first call to `lytecache.New()` creates the database file (includ
 | `Vacuum()` / `Close()` | Reclaim disk space / shut down cleanly (idempotent). |
 | `lytecache.Memoize(cache, key, ttl, loader)` | Read-through cache for a computed value. It's a package-level generic function, since Go methods can't have type parameters. |
 | `Lock(name, timeout)` | Process-safe distributed lock; release via `lock.Release()`. |
+| `HSet(key, field, value, opts...)` / `HSetMany` / `HSetNX` | Atomically set field(s) of a JSON object value. See [Hashes](#hashes). |
+| `HGet(key, field, dest)` / `HGetRaw` / `HMGet` / `HGetAll` | Read fields without decoding the rest of the document. |
+| `HDel` / `HExists` / `HKeys` / `HVals` / `HLen` | Remove, test or list fields. |
+| `HIncrBy(key, field, n)` / `HIncrByFloat` | Atomic counters inside a JSON object. |
+| `Notify(channel, payload)` / `NotifyMany` | Publish a local event (single host, polled, durable). See [Events](#events-local-notification). |
+| `Watch(patterns, FromSeq(n), PollInterval(d))` | Subscribe; receive from `sub.Events()`, or `sub.Next(ctx)` / `sub.TryNext()`; `sub.Close()`. |
+| `SaveCursor(name, seq)` / `LoadCursor(name)` | Persist a subscriber position for durable resume. |
+| `OnChange(fn, ops...)` | In-process callback after each committed mutation. |
 
-All errors that indicate a specific condition are sentinel errors you can test with `errors.Is`: `ErrCacheFull`, `ErrSerialization`, `ErrSchemaVersion`, `ErrLockTimeout`, `ErrNotNumeric`.
+All errors that indicate a specific condition are sentinel errors you can test with `errors.Is`: `ErrCacheFull`, `ErrSerialization`, `ErrSchemaVersion`, `ErrLockTimeout`, `ErrNotNumeric`, `ErrOverflow`, `ErrGap` (matched by `*GapError`), `ErrSubscriptionClosed`, `ErrInvalidArgument`.
+
+## Hashes
+
+`HSet` and friends update single fields of a stored JSON object **atomically**. The new
+document is computed inside SQLite from the row's current value, so concurrent writers
+(goroutines or processes) to different fields, or `HIncrBy` on the same field, never lose
+each other's work. A get-modify-set in application code would.
+
+```go
+created, _ := cache.HSet("user:101", "status", "active") // true: the field was new
+cache.HIncrBy("user:101", "logins", 1)                    // atomic counter inside the document
+var status string
+found, _ := cache.HGet("user:101", "status", &status)
+```
+
+- **A hash is just a JSON value.** `Set(key, map/struct)` is usable with `HGet`, and `Get`
+  returns the whole document.
+- **Missing keys are created** with no expiry, unless you pass `TTL(d)`, which applies only
+  on creation. A field write never changes an existing key's TTL. Expired keys are treated
+  as missing and never revived.
+- **Field names are literal top-level keys** (`"a.b"` is not a path).
+- **Errors:** a non-object value returns `ErrSerialization` and is left untouched;
+  `HIncrBy` on a non-integer field returns `ErrNotNumeric`; leaving the int64 range
+  returns `ErrOverflow`, with nothing written.
+- **Lock cost:** a hash write takes the same write lock as `Set`. The win is atomicity and
+  smaller payloads, not lock contention.
+- **SQLite version:** `modernc.org/sqlite` bundles a recent SQLite with JSON1.
+  `Stats().HashMode` reports `"json1"`, or `"fallback"` (read-modify-write under
+  `BEGIN IMMEDIATE`) on an SQLite without it. JSONB is never used, so other languages can
+  read the values.
+
+## Events (local notification)
+
+Processes sharing one cache file **on one machine** can notify each other. The typical
+case is invalidating in-memory state across workers:
+
+```go
+// worker A, after committing a DB change
+cache.Delete("balance:42")
+cache.Notify("invalidate", map[string]any{"key": "balance:42"})
+
+// workers B..N
+sub, _ := cache.Watch([]string{"invalidate"})
+defer sub.Close()
+for ev := range sub.Events() {
+    var p struct{ Key string `json:"key"` }
+    ev.Decode(&p)
+    delete(localMemo, p.Key)
+}
+```
+
+This is **not Redis Pub/Sub**. It is single host only, polled (about the 50 ms poll
+interval; up to about 1 s after an idle spell), and durable: events are rows with a
+monotonic `Seq`, so `Watch(..., FromSeq(cursor))` resumes after a restart. Delivery is
+at-least-once, so handlers must be idempotent. Events are kept for
+`WithEventRetention` (default 1 h). A subscriber that falls further behind sees its
+`Events()` channel close with `sub.Err()` returning a `*GapError`, never a silent skip.
+It is opt-in: no table and no goroutine exist until you use it.
+
+`OnChange(fn)` is the in-process, immediate alternative. `WithPublishChanges(OpDelete,
+OpFlush)` publishes those mutations to the reserved `__cache__` channel for other
+processes. Bulk operations emit one `ChangeRecord`, not one per key. Full guide:
+[docs/notifications.md](../docs/notifications.md).
 
 ## Why a pure-Go SQLite driver?
 

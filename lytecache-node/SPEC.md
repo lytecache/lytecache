@@ -4,6 +4,8 @@ This document defines the storage schema and type encoding for the Node.js imple
 
 ## Schema Version
 
+- **Events table**: a file may also contain an `events` table and an `('events_version', '1')` row in `meta`, created the first time `notify`/`watch` is used. This is "schema version 2" in the root [SPEC.md](../SPEC.md#schema-versions). It is purely additive, so `schema_version` stays `1` and older libraries keep opening the file.
+
 - **Current**: 1
 - **Compatibility**: Higher versions are rejected on open with `SchemaVersionError`.
 
@@ -128,6 +130,27 @@ better-sqlite3 is synchronous: there is one connection per `LyteCache` instance,
 ## Namespace Isolation
 
 The `namespace` column lets multiple independent caches share one file. Every query is scoped to `namespace`; different namespaces never see each other's keys, including for `flush()`.
+
+
+## Events and Hashes
+
+The normative rules for both features live in the root [SPEC.md](../SPEC.md): the
+`events` table and polling query, delivery semantics, the gap rule, change records,
+the hash path construction, type guards, TTL and `size_bytes` handling, and the JSON1
+fallback. This implementation follows them exactly. The Node.js-specific surface:
+
+**Events** (single host only, polled, durable; see [docs/notifications.md](../docs/notifications.md)):
+- `notify(channel, payload = null)` and `notifyMany([[channel, payload], ...])`: the payload is encoded by the same rules as `set`.
+- `watch(channels, { fromSeq, pollInterval })`: one timer and one read-only better-sqlite3 connection per subscription. The pull forms are the async iterator, `next(timeoutMs)` and `tryNext()`. The push form is `.on("event")`: while an `"event"` listener is attached, events are emitted instead of queued, and a gap is emitted as `"error"`. An open subscription's timer keeps the process alive until `close()`.
+- `onChange(listener, { events })` delivers from a `setImmediate` callback. The depth guard sees only synchronous re-entry: a listener's writes after an `await` start again at depth 1.
+
+**Hashes** (atomic field writes over value_type-4 JSON objects; no schema change):
+- `hset`, `hsetnx`, `hsetMany`, `hget`, `hmget`, `hgetAll`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincrby` (`number | bigint`), `hincrbyfloat`.
+- `hincrby` binds its amount as a `bigint`, because better-sqlite3 binds JS numbers as REAL. The result is read back as decimal text, so int64 values stay exact.
+- Buffers are rejected as field values. The fallback keeps each field's exact JSON text and key order (it does not round-trip through `JSON.parse`).
+
+`cache.hashMode` / `stats().hashMode` reports `"json1"` or `"fallback"`. `LYTECACHE_FORCE_JSON_FALLBACK=1` forces the fallback.
+
 
 ## Example: Cross-Language Read
 

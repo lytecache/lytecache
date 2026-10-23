@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Local event notification: `notify`, `notify_many`, `watch` (returns a
+  `Subscription`: iterate, `poll`, `try_next`, `close`), `save_cursor`,
+  `load_cursor`, and `GapError`. Single host only, polled, durable. Events
+  live in an `events` table created on first use; `schema_version` stays 1
+  so older libraries still open the file. See docs/notifications.md.
+- `on_change(listener, events)`: in-process listeners called after each
+  committed mutation, one record per call (bulk operations included).
+- Constructor options `publish_changes`, `event_retention`,
+  `event_max_count`, `change_key_cap`.
+
+- Hash operations on JSON object values: `hset`, `hset_many`, `hsetnx`,
+  `hget`, `hmget`, `hgetall`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`,
+  `hincrby`, `hincrbyfloat`. Each write is computed inside SQLite from the
+  row's current value, so concurrent field updates are never lost. No
+  schema change: hashes are ordinary `value_type` 4 rows, and
+  `schema_version` stays 1. See SPEC.md, "Hashes".
+- `stats()["hash_mode"]`: `"json1"`, or `"fallback"` when the linked SQLite
+  lacks JSON1, in which case hash writes use read-modify-write under
+  `BEGIN IMMEDIATE`.
+
 ## [0.2.0] - Unreleased
 
 Serialization upgrade. No schema changes (schema_version stays 1) and no

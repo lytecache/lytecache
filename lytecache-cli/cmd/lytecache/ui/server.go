@@ -67,6 +67,10 @@ type Config struct {
 	// keys' values are never fetched or rendered by the value viewer --
 	// see MatchesMaskPattern.
 	MaskKeys []string
+	// MaskChannels are glob patterns (filepath.Match syntax) whose
+	// matching channels' event payloads are never rendered (see
+	// eventMasker); MaskKeys applies to event payloads too.
+	MaskChannels []string
 
 	// NoMetrics removes the /metrics route entirely (not just guards it).
 	NoMetrics bool
@@ -101,6 +105,7 @@ type Server struct {
 	rateLimiter     *loginRateLimiter
 	audit           *auditLogger
 	maskKeys        []string
+	maskChannels    []string
 
 	noMetrics       bool
 	metricsToken    string
@@ -163,6 +168,7 @@ func NewServer(cfg Config) (*Server, error) {
 		rateLimiter:     newLoginRateLimiter(),
 		audit:           audit,
 		maskKeys:        cfg.MaskKeys,
+		maskChannels:    cfg.MaskChannels,
 		noMetrics:       cfg.NoMetrics,
 		metricsToken:    cfg.MetricsToken,
 		metricsCacheTTL: cfg.MetricsCacheTTL,

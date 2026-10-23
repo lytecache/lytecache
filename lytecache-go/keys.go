@@ -83,11 +83,15 @@ ORDER BY key LIMIT ?`, c.namespace, pattern, lastKey, now, keysBatchSize)
 // pattern argument by design -- to clear a subset, delete by key or by
 // pattern instead (iterate [Cache.Keys] and call [Cache.Delete]).
 func (c *Cache) Flush() error {
-	if _, err := c.writeDB.Exec(`DELETE FROM cache WHERE namespace = ?`, c.namespace); err != nil {
+	res, err := c.writeDB.Exec(`DELETE FROM cache WHERE namespace = ?`, c.namespace)
+	if err != nil {
 		return fmt.Errorf("lytecache: flush: %w", err)
 	}
 	c.lruMu.Lock()
 	c.lruBuffer = make(map[string]lruUpdate)
 	c.lruMu.Unlock()
+	if n := rowsAffected(res); n > 0 {
+		c.changed(opFlush, nil, int(n))
+	}
 	return nil
 }

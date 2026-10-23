@@ -80,9 +80,17 @@ export LYTECACHE_PATH=/data/cache.db  # takes priority over the default
 | `touch(key, ttl)` | Refresh a key's TTL (sliding expiration). |
 | `incr(key, amount=1)` / `decr(key, amount=1)` | Atomic integer counters. |
 | `incr_float(key, amount)` | Atomic float counter. |
+| `hset(key, field, value, ttl=None)` / `hset_many(key, mapping, ttl=None)` / `hsetnx(...)` | Atomically set field(s) of a JSON object. See [Hashes](#hashes). |
+| `hget(key, field, default=None, cls=None)` / `hmget(key, fields)` / `hgetall(key)` | Read field(s) without decoding the rest of the document. |
+| `hdel(key, *fields)` / `hexists` / `hkeys` / `hvals` / `hlen` | Remove fields, test or list them. |
+| `hincrby(key, field, amount=1)` / `hincrbyfloat(key, field, amount)` | Atomic counters *inside* a JSON object. |
+| `notify(channel, payload=None)` / `notify_many(events)` | Publish a local event (single host, polled, durable). See [Events](#events-local-notification). |
+| `watch(*channels, from_seq=None, poll_interval=0.05)` | Subscribe to local events; iterate, `poll()`, `try_next()`, `close()`. |
+| `save_cursor(name, seq)` / `load_cursor(name)` | Persist a subscriber's position for durable resume. |
+| `on_change(listener, events=...)` | In-process callback after each committed mutation. |
 | `keys(pattern="*")` | Lazily iterate matching keys (glob syntax). |
 | `flush()` | Clear the current namespace. |
-| `stats()` | Hits, misses, hit rate, key count, size, evictions, path. |
+| `stats()` | Hits, misses, hit rate, key count, size, evictions, path, hash mode. |
 | `vacuum()` / `close()` | Reclaim disk space / shut down cleanly. |
 | `memoize(ttl=None)` | Decorator that caches a function's return value. |
 | `lock(name, timeout=30, blocking=True, poll=0.05)` | Process-safe context-manager lock. |
@@ -93,6 +101,99 @@ export LYTECACHE_PATH=/data/cache.db  # takes priority over the default
 with LyteCache() as cache:
     cache.set("k", "v")
 ```
+
+## Events (local notification)
+
+Processes sharing one cache file **on one machine** can tell each other that
+something happened. The typical case is invalidating in-memory state across
+workers:
+
+```python
+# worker A, after committing a DB change
+cache.delete("balance:42")
+cache.notify("invalidate", {"key": "balance:42"})
+
+# workers B..N
+for event in cache.watch("invalidate"):
+    local_memo.pop(event.payload["key"], None)
+```
+
+This is **not Redis Pub/Sub**. It is single host only (it will not work
+across machines), polled (latency about the 50 ms poll interval, up to
+about 1 s after an idle spell), and durable: events are rows with a
+monotonic `seq`, so a restarted subscriber resumes with
+`watch(..., from_seq=cursor)`. Delivery is at-least-once, so handlers must
+be idempotent. Events are kept for `event_retention` (default 1 hour), and
+a subscriber that falls further behind gets a `GapError` rather than a
+silent skip. It is opt-in: a cache that never uses it creates no table and
+starts no thread.
+
+For reactions within one process, `cache.on_change(listener)` is immediate
+and free. `LyteCache(publish_changes={"delete", "flush"})` publishes those
+mutations to the `__cache__` channel for other processes. Bulk operations
+emit one record, not one per key. Full guide:
+[docs/notifications.md](../docs/notifications.md).
+
+## Hashes
+
+Hash operations read and change single fields of a stored JSON object. The
+main reason to use them is **atomicity**. The obvious way to update one
+field races:
+
+```python
+# worker A                              # worker B
+doc = cache.get("user:101")             doc = cache.get("user:101")
+doc["status"] = "active"                doc["plan"] = "pro"
+cache.set("user:101", doc)              cache.set("user:101", doc)   # silently erases A's change
+```
+
+`hset` does the update inside SQLite, in one statement computed from the
+row's *current* value, so concurrent writers to different fields, or
+`hincrby` calls on the same field, never lose each other's work, even
+across processes:
+
+```python
+cache.hset("user:101", "status", "active")   # True: the field was new
+cache.hset("user:101", "status", "paused")   # False: it replaced a value
+cache.hincrby("user:101", "logins")          # atomic counter inside the document
+cache.hget("user:101", "status")             # "paused"
+cache.hgetall("user:101")                    # the whole object, as a dict
+```
+
+- **Hashes are just JSON values.** There is no separate type: anything
+  stored with `set(key, {...})` works with `hget`, and `get()` on a hash
+  returns the whole document.
+- **Missing keys are created** (like Redis `HSET`) as a new object with **no
+  expiry**, unless you pass `ttl=`. That TTL only applies when the call
+  creates the key.
+- **Field writes keep the TTL.** `hset` on a key with a TTL leaves the
+  countdown alone. Only `expire`/`touch`/`persist` change it.
+- **Expired keys stay dead.** Reads treat them as missing, and a write
+  starts a fresh object rather than reviving old fields.
+- **Field names are taken literally.** `"a.b"`, `"a[0]"` and `'q"x'` are
+  top-level keys, not paths into nested data.
+- **Type-checked.** Hash operations on a non-object value (a string, a
+  number, bytes, a JSON array) raise `SerializationError` and leave the
+  value untouched. `hincrby` on a non-integer field raises `TypeError`.
+  Going past the 64-bit integer range raises `OverflowError`, and nothing
+  is written.
+- Removing the last field with `hdel` leaves `{}` in place. Unlike Redis,
+  it does not delete the key.
+
+Lock-wise, a hash write is an ordinary write: it takes the same write lock
+and `busy_timeout` as `set`, so many single-field writes are not cheaper in
+lock terms than whole writes. What you gain is atomicity, plus less data
+moved when documents are large. In a measured comparison with
+get-modify-set, it was about the same speed on a 2 KB, 50-field document,
+and about 1.8× faster on a 50 KB one.
+
+**SQLite version.** Hashes use SQLite's built-in JSON functions (3.38+),
+which Python's bundled SQLite has. On an older system SQLite, lytecache
+falls back to a read-modify-write under an exclusive write lock: still
+atomic, just slower. It logs one warning, and `stats()["hash_mode"]`
+reports `"json1"` or `"fallback"`. Values are always stored as plain JSON
+text, never SQLite's binary JSONB format, so other lytecache
+implementations can read them.
 
 ## Serialization
 
@@ -156,6 +257,12 @@ and never open one from an untrusted source.
   key-value store with counters. `lytecache` intentionally stays small.
 
 ## Configuration reference
+
+Events add these constructor options: `publish_changes` (set of `"set"`,
+`"delete"`, `"flush"`, default none), `event_retention` (seconds, default
+3600), `event_max_count` (default unlimited) and `change_key_cap` (default
+100).
+
 
 ```python
 LyteCache(

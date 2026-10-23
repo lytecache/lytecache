@@ -22,6 +22,8 @@ type Stats struct {
 	// zero; a growing value indicates the sweeper isn't keeping up.
 	ExpiredPresent int64
 	Path           string
+	// HashMode is "json1" or "fallback"; see [Cache.HashMode].
+	HashMode string
 }
 
 // Stats returns current statistics for the cache's namespace.
@@ -56,6 +58,7 @@ FROM cache WHERE namespace = ?`, nowMillis(), c.namespace).
 		ExpiredRemoved: c.expiredRemoved.Load(),
 		ExpiredPresent: expiredPresent,
 		Path:           c.path,
+		HashMode:       c.HashMode(),
 	}, nil
 }
 

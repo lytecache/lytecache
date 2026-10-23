@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Hash operations on JSON object values: `hset`, `hsetnx`, `hsetMany`, `hget`, `hmget`,
+  `hgetAll`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincrby`, `hincrbyfloat`, plus
+  `hashMode` and `stats().hashMode`. Writes are computed inside SQLite, so concurrent field
+  updates are never lost. No schema change.
+- Local event notification: `notify`, `notifyMany`, `watch` (returns a `Subscription`:
+  async iterator, `.on("event")`, `next`, `tryNext`, `close`/`using`), `saveCursor`,
+  `loadCursor`, `GapError`. Single host only, polled, durable. The `events` table is created
+  on first use; `schema_version` stays 1.
+- `onChange(listener, { events })`: in-process change listeners, one record per call.
+- Options `publishChanges`, `eventRetention`, `eventMaxCount`, `changeKeyCap`.
+
 ## [0.2.0] - Unreleased
 
 Initial release. Embedded, Redis-like caching backed by SQLite (via better-sqlite3), matching the

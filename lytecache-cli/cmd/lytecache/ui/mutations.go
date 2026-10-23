@@ -35,6 +35,13 @@ func (s *Server) registerMutationRoutes(mux *http.ServeMux) {
 	// no cache data of its own, so it is intentionally not gated behind
 	// --allow-delete -- gating it would protect against the wrong thing.
 	s.handle(mux, "POST /db/{db}/namespaces/{ns}/vacuum", s.handleVacuum)
+
+	// Event purges are deletion, so they are allowed under --allow-delete
+	// like key deletes. There is no route that publishes or rewrites an
+	// event (see events.go).
+	s.handle(mux, "POST /db/{db}/events/delete-event", s.requireAllowDelete(s.handleDeleteEvent))
+	s.handle(mux, "POST /db/{db}/events/purge", s.requireAllowDelete(s.handlePurgeEvents))
+	s.handle(mux, "POST /db/{db}/events/clear-channel", s.requireAllowDelete(s.handleClearChannel))
 }
 
 // requireAllowDelete wraps a mutating handler so the 403 is enforced

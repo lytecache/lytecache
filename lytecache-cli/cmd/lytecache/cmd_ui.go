@@ -38,6 +38,7 @@ type uiRunOptions struct {
 	tlsKey          string
 	insecure        bool
 	maskKeys        []string
+	maskChannels    []string
 	metricsToken    string
 	noMetrics       bool
 	metricsCacheTTL time.Duration
@@ -54,6 +55,7 @@ type uiFlagVars struct {
 	tlsKey          string
 	insecure        bool
 	maskKeys        []string
+	maskChannels    []string
 	metricsToken    string
 	noMetrics       bool
 	metricsCacheTTL time.Duration
@@ -63,7 +65,7 @@ func (v *uiFlagVars) toOptions() uiRunOptions {
 	return uiRunOptions{
 		port: v.port, host: v.host, dbs: v.dbs, scanDirs: v.scanDirs, allowDelete: v.allowDelete,
 		configPath: v.configPath, tlsCert: v.tlsCert, tlsKey: v.tlsKey, insecure: v.insecure,
-		maskKeys: v.maskKeys, metricsToken: v.metricsToken, noMetrics: v.noMetrics,
+		maskKeys: v.maskKeys, maskChannels: v.maskChannels, metricsToken: v.metricsToken, noMetrics: v.noMetrics,
 		metricsCacheTTL: v.metricsCacheTTL,
 	}
 }
@@ -94,7 +96,9 @@ func bindUIFlags(cmd *cobra.Command) *uiFlagVars {
 	cmd.Flags().BoolVar(&v.insecure, "insecure", false,
 		"acknowledge serving beyond 127.0.0.1 over plain HTTP without TLS -- traffic, including the session cookie, is not encrypted")
 	cmd.Flags().StringArrayVar(&v.maskKeys, "mask-keys", nil,
-		"glob pattern (repeatable): matching keys' values are never shown in the value viewer, e.g. --mask-keys '*otp*'")
+		"glob pattern (repeatable): matching keys' values are never shown, nor are event payloads that reference a matching key or field, e.g. --mask-keys '*otp*'")
+	cmd.Flags().StringArrayVar(&v.maskChannels, "mask-channels", nil,
+		"glob pattern (repeatable): event payloads on matching channels are never shown, e.g. --mask-channels 'payments:*'")
 	cmd.Flags().StringVar(&v.metricsToken, "metrics-token", "",
 		"bearer token required on /metrics -- mandatory when --host is not 127.0.0.1")
 	cmd.Flags().BoolVar(&v.noMetrics, "no-metrics", false, "disable the /metrics endpoint entirely")
@@ -228,6 +232,7 @@ func buildUIServer(logOut, logErr io.Writer, opts uiRunOptions) (*builtUIServer,
 		SecureCookie:    tlsConfigured,
 		AuditLogPath:    auditPath,
 		MaskKeys:        opts.maskKeys,
+		MaskChannels:    opts.maskChannels,
 		NoMetrics:       opts.noMetrics,
 		MetricsToken:    opts.metricsToken,
 		MetricsCacheTTL: opts.metricsCacheTTL,

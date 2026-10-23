@@ -61,6 +61,7 @@ func (c *Cache) atomicIncr(key string, amountText string, resultType int, allowe
 	if err != nil {
 		return "", fmt.Errorf("lytecache: incr %q: reading back result: %w", key, err)
 	}
+	c.changed(opSet, []string{key}, 1)
 	c.maybeOpportunisticSweep()
 	return string(stored), nil
 }

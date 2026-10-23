@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Hash operations on JSON object values: `HSet`, `HSetNX`, `HSetMany`, `HGet`, `HGetRaw`,
+  `HGetString`, `HGetInt64`, `HMGet`, `HGetAll`, `HDel`, `HExists`, `HKeys`, `HVals`, `HLen`,
+  `HIncrBy`, `HIncrByFloat`, plus `HashMode()` and `Stats.HashMode`. Writes are computed
+  inside SQLite, so concurrent field updates are never lost. No schema change.
+- Local event notification: `Notify`, `NotifyMany`, `Watch` (returns `*Subscription`:
+  `Events()`, `Next`, `TryNext`, `Err`, `LastSeq`, `Close`), `FromSeq`, `PollInterval`,
+  `SaveCursor`, `LoadCursor`, `*GapError`/`ErrGap`. Single host only, polled, durable. The
+  `events` table is created on first use; `schema_version` stays 1.
+- `OnChange(fn, ops...)`: in-process change listeners, one `ChangeRecord` per call.
+- Options `WithPublishChanges`, `WithEventRetention`, `WithEventMaxCount`, `WithChangeKeyCap`.
+- `EventStats()` / `RecentEvents()` for admin tooling, and `RawValue.ValueType()`.
+  `RecentEvents` takes optional channel patterns.
+- More admin-tooling reads and purges for events: `MatchChannel` (Watch's exact matching
+  rule), `EventChannelStats`, `EventCountSince`, `Cursors` (every saved cursor, across
+  namespaces), `DeleteEvent`, `DeleteEventsBefore` (removes a seq prefix, like retention)
+  and `DeleteChannelEvents`. None of them creates the events table, and there is no
+  admin method that inserts or rewrites an event.
+- Errors `ErrOverflow`, `ErrGap`, `ErrSubscriptionClosed`, `ErrInvalidArgument`.
+
 ## [0.3.0] - 2026-08-07
 
 - `Cache.Namespaces()`: enumerates every namespace present in a database file (key count, size on

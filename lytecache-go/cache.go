@@ -91,6 +91,22 @@ type Cache struct {
 	sweepStop chan struct{}
 	sweepDone chan struct{}
 
+	// json1 is whether hash operations use single-statement JSON1 SQL
+	// (detected once at open) or the read-modify-write fallback.
+	json1 bool
+
+	// Events and change listeners are opt-in: none of this costs anything
+	// (no table, no goroutine) until Notify/Watch/OnChange is first used.
+	publishOps     map[string]bool
+	eventRetention time.Duration
+	eventMaxCount  int64
+	changeKeyCap   int
+	eventsReady    atomic.Bool
+	subsMu         sync.Mutex
+	subs           map[*Subscription]struct{}
+	dispatcherMu   sync.Mutex
+	dispatcher     atomic.Pointer[dispatcher]
+
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -122,7 +138,38 @@ type options struct {
 	sweepInterval time.Duration
 	strict        bool
 	logger        *slog.Logger
+
+	publishOps     []string
+	eventRetention time.Duration
+	eventMaxCount  int64
+	changeKeyCap   int
 }
+
+// WithPublishChanges makes the given mutations ([OpSet], [OpDelete],
+// [OpFlush]) also publish a [ChangeRecord] event to the reserved
+// "__cache__" channel, for watchers in other processes on this host. Off by
+// default. Each published mutation costs one extra event row written under
+// the write lock (one per call, not per key), and delivery is polled, not
+// immediate -- for in-process reactions use [Cache.OnChange] instead.
+func WithPublishChanges(ops ...string) Option {
+	return func(o *options) { o.publishOps = append(o.publishOps, ops...) }
+}
+
+// WithEventRetention sets how long events are kept before the sweeper
+// deletes them, whether or not anyone read them (default 1 hour). A
+// subscriber offline for longer than this loses events (and is told so
+// with a [*GapError]); it is the knob for how much downtime is tolerable.
+func WithEventRetention(d time.Duration) Option {
+	return func(o *options) { o.eventRetention = d }
+}
+
+// WithEventMaxCount additionally caps retention at the newest n events
+// (default: no count cap).
+func WithEventMaxCount(n int64) Option { return func(o *options) { o.eventMaxCount = n } }
+
+// WithChangeKeyCap sets how many keys a [ChangeRecord] lists before it is
+// truncated (default 100).
+func WithChangeKeyCap(n int) Option { return func(o *options) { o.changeKeyCap = n } }
 
 // WithPath sets an explicit database file path, overriding the default
 // location computed by [DefaultPath]. This is an optional escape hatch --
@@ -179,13 +226,25 @@ func WithLogger(logger *slog.Logger) Option {
 // is no separate init step.
 func New(opts ...Option) (*Cache, error) {
 	o := options{
-		namespace:     "default",
-		eviction:      LRU,
-		sweepInterval: 60 * time.Second,
-		logger:        slog.Default(),
+		namespace:      "default",
+		eviction:       LRU,
+		sweepInterval:  60 * time.Second,
+		logger:         slog.Default(),
+		eventRetention: defaultRetention,
+		changeKeyCap:   defaultKeyCap,
 	}
 	for _, opt := range opts {
 		opt(&o)
+	}
+	publishOps, err := validOps(o.publishOps)
+	if err != nil {
+		return nil, err
+	}
+	if o.eventRetention <= 0 {
+		return nil, fmt.Errorf("%w: event retention must be positive", ErrInvalidArgument)
+	}
+	if o.eventMaxCount < 0 || o.changeKeyCap < 0 {
+		return nil, fmt.Errorf("%w: event max count and change key cap must be >= 0", ErrInvalidArgument)
 	}
 
 	path := o.path
@@ -247,7 +306,14 @@ func New(opts ...Option) (*Cache, error) {
 		logger:        o.logger,
 		sweepInterval: o.sweepInterval,
 		lruBuffer:     make(map[string]lruUpdate),
+
+		publishOps:     publishOps,
+		eventRetention: o.eventRetention,
+		eventMaxCount:  o.eventMaxCount,
+		changeKeyCap:   o.changeKeyCap,
+		subs:           make(map[*Subscription]struct{}),
 	}
+	c.detectJSON1()
 
 	if o.sweepInterval > 0 {
 		c.sweepStop = make(chan struct{})
@@ -375,6 +441,19 @@ func (c *Cache) Limits() Limits {
 // idempotent and safe to call more than once.
 func (c *Cache) Close() error {
 	c.closeOnce.Do(func() {
+		c.subsMu.Lock()
+		subs := make([]*Subscription, 0, len(c.subs))
+		for s := range c.subs {
+			subs = append(subs, s)
+		}
+		c.subsMu.Unlock()
+		for _, s := range subs {
+			_ = s.Close()
+		}
+		if d := c.dispatcher.Load(); d != nil {
+			d.close()
+			c.dispatcher.Store(nil)
+		}
 		if c.sweepStop != nil {
 			close(c.sweepStop)
 			<-c.sweepDone

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	lytecache "github.com/lytecache/lytecache-go"
+
+	"github.com/lytecache/lytecache-cli/cmd/lytecache/ui"
 )
 
 // expandHome expands a leading "~" or "~/" to the user's home directory.
@@ -72,7 +74,10 @@ func openCache(flags *globalFlags, readOnly bool) (c *lytecache.Cache, closeFn f
 		}
 	}
 
-	opts := []lytecache.Option{lytecache.WithPath(path)}
+	// Event retention belongs to the application that publishes events; the
+	// CLI can't know it, so its sweeps (including `maintain`) never delete
+	// events (see ui.NoEventRetention).
+	opts := []lytecache.Option{lytecache.WithPath(path), lytecache.WithEventRetention(ui.NoEventRetention)}
 	if flags.namespace != "" {
 		opts = append(opts, lytecache.WithNamespace(flags.namespace))
 	}

@@ -219,13 +219,20 @@ func TestNoRouteCanCreateOrModifyAValue(t *testing.T) {
 		"GET /db/{db}":                      true,
 		"GET /db/{db}/namespaces/{ns}/keys": true,
 		"GET /db/{db}/namespaces/{ns}/keys/{key...}": true,
-		"GET /search":           true,
-		"GET /healthz":          true,
-		"GET /login":            true,
-		"POST /login":           true,
-		"POST /logout":          true,
-		"GET /change-password":  true,
-		"POST /change-password": true,
+		"GET /db/{db}/events":                        true, // read-only events tail
+		"GET /db/{db}/events/{seq}":                  true, // read-only event viewer
+		// Event purges: deletion only, gated by --allow-delete. Nothing
+		// publishes or rewrites an event.
+		"POST /db/{db}/events/delete-event":         true,
+		"POST /db/{db}/events/purge":                true,
+		"POST /db/{db}/events/clear-channel":        true,
+		"GET /search":                               true,
+		"GET /healthz":                              true,
+		"GET /login":                                true,
+		"POST /login":                               true,
+		"POST /logout":                              true,
+		"GET /change-password":                      true,
+		"POST /change-password":                     true,
 		"POST /db/{db}/namespaces/{ns}/delete-key":  true,
 		"POST /db/{db}/namespaces/{ns}/delete-keys": true,
 		"POST /db/{db}/namespaces/{ns}/flush":       true,
@@ -266,6 +273,13 @@ func TestNoRouteCanCreateOrModifyAValue(t *testing.T) {
 		{http.MethodPost, "/db/svc/namespaces/default/keys/k-string"},     // "POST to the value viewer's own URL"
 		{http.MethodPut, "/db/svc/namespaces/default/keys/k-string/ttl"},  // "PUT to extend a TTL"
 		{http.MethodPost, "/db/svc/namespaces/default/keys/k-string/set"}, // "a set-like action"
+		{http.MethodPost, "/db/svc/events"},                               // "publish at the list URL"
+		{http.MethodPost, "/db/svc/events/notify"},                        // "a notify action"
+		{http.MethodPost, "/db/svc/events/publish"},                       // "a publish action"
+		{http.MethodPost, "/db/svc/events/1"},                             // "replay/edit an event"
+		{http.MethodPut, "/db/svc/events/1"},                              // "replace an event"
+		{http.MethodPatch, "/db/svc/events/1"},                            // "edit an event"
+		{http.MethodPut, "/db/svc/events"},                                // "bulk insert"
 	}
 	for _, tc := range plausibleWritePaths {
 		body := "value=malicious&csrf_token=" + csrfToken
