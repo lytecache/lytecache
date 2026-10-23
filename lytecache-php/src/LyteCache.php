@@ -12,6 +12,7 @@ use Lytecache\Exceptions\SerializationException;
 use Lytecache\Support\Paths;
 use Lytecache\Support\Schema;
 use Lytecache\Support\Serializer;
+use Lytecache\Support\Statement;
 
 /**
  * An embedded, Redis-like cache backed by a SQLite file.
@@ -161,6 +162,10 @@ final class LyteCache
             try {
                 $pdo = new \PDO('sqlite:'.$path, options: [
                     \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+                    // Resets each statement before it runs, so a cached statement whose
+                    // last execution failed can't silently drop the next write. See
+                    // Support\Statement.
+                    \PDO::ATTR_STATEMENT_CLASS => [Statement::class],
                 ]);
 
                 foreach (Schema::PRAGMAS as $pragma) {
@@ -228,6 +233,11 @@ final class LyteCache
         }
     }
 
+    /**
+     * Cached prepared statements. Reuse is safe even after a failed execution,
+     * because the connection's statement class (Support\Statement) resets every
+     * statement before running it.
+     */
     private function prepare(string $sql): \PDOStatement
     {
         return $this->stmtCache[$sql] ??= $this->pdo->prepare($sql);

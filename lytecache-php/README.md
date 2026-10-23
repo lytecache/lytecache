@@ -1,5 +1,8 @@
 # lytecache
 
+> **Upgrade to 0.2.1 if you're on 0.2.0.** In 0.2.0, once any write failed, later writes could be
+> silently lost on every PHP version. See the [CHANGELOG](CHANGELOG.md#021---2026-10-23).
+
 Redis-like caching for PHP with zero infrastructure -- no server, no extension beyond `pdo_sqlite`, just a file. `lytecache` gives you a familiar Redis-shaped API -- `set`/`get`, TTLs, atomic counters, eviction, distributed locks -- backed by a local SQLite file instead of a daemon. It works standalone in any PHP 8.2+ project, and as a native Laravel cache driver: point `CACHE_STORE` at `lytecache` and the `Cache` facade, `Cache::remember()`, and `Cache::lock()` all just work.
 
 ## Install

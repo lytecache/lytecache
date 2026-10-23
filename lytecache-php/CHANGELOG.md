@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.1] - 2026-10-23
+
+> **Correctness advisory: upgrade if you use 0.2.0.** After any write failed, later writes
+> could be silently lost. This is not a security issue, but it is data loss.
+
+### Fixed
+
+- **Writes silently lost after a failed write (all PHP versions).** When a write failed inside
+  its transaction (for example a constraint violation raised by the database), the cached
+  prepared statement it used was left un-reset. The next write
+  through that statement then did nothing and reported no error: `set()` returned normally, but
+  the value was never stored. Every later write through the same statement was lost the same way
+  until the `LyteCache` instance was discarded.
+  - Affected: `set`, `setMany`, `add`, `incr`/`decr` and other writes that reuse a statement,
+    on every supported PHP version. On PHP 8.4 more combinations were affected (for example, a
+    failed `setMany` also broke later `set` calls).
+  - Not affected: a process whose writes never fail. The bug needs one write to fail first.
+  - Symptoms: values missing after a successful `set()`; `incr()` throwing "not numeric" on a key
+    that doesn't exist.
+  - Fix: every statement is now reset before it runs, and a statement that fails without raising
+    an error now throws instead of returning silently. Statement caching is unchanged; the
+    measured overhead is within run-to-run noise.
+
+
 ## [0.1.0] - Unreleased
 
 Initial release. Embedded, Redis-like caching backed by SQLite (via `pdo_sqlite`), matching the
